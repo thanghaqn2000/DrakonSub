@@ -1,5 +1,26 @@
 dist
 .DS_Store
 *.egg-info
-auto_subtitle/__pycache__
 build
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Secrets & local config
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Media outputs (generated locally)
+*.mp4
+*.srt
+*.wav

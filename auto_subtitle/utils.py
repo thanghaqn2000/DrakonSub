@@ -1,5 +1,6 @@
 import os
-from typing import Iterator, TextIO
+import re
+from typing import Iterator, List, TextIO
 
 
 def str2bool(string):
@@ -44,3 +45,55 @@ def write_srt(transcript: Iterator[dict], file: TextIO):
 
 def filename(path):
     return os.path.splitext(os.path.basename(path))[0]
+
+
+def parse_srt(content: str) -> List[dict]:
+    entries = []
+    for block in re.split(r"\n\s*\n", content.strip()):
+        lines = block.strip().split("\n")
+        if len(lines) < 3:
+            continue
+        start_str, end_str = lines[1].split(" --> ")
+        entries.append({
+            "start_str": start_str.strip(),
+            "end_str": end_str.strip(),
+            "text": "\n".join(lines[2:]).strip(),
+        })
+    return entries
+
+
+def write_srt_entries(entries: List[dict], file: TextIO):
+    for i, entry in enumerate(entries, start=1):
+        print(
+            f"{i}\n"
+            f"{entry['start_str']} --> {entry['end_str']}\n"
+            f"{entry['text'].strip().replace('-->', '->')}\n",
+            file=file,
+            flush=True,
+        )
+
+
+def translate_srt_entries(
+    entries: List[dict],
+    target_lang: str,
+    source_lang: str = "en",
+    engine: str = "openai",
+) -> List[dict]:
+    if engine == "openai":
+        from .openai_translate import translate_srt_entries_openai
+
+        return translate_srt_entries_openai(entries, target_lang=target_lang)
+
+    from deep_translator import GoogleTranslator
+
+    translator = GoogleTranslator(source=source_lang, target=target_lang)
+    translated = []
+
+    for entry in entries:
+        text = entry["text"].strip()
+        if not text:
+            translated.append({**entry, "text": text})
+            continue
+        translated.append({**entry, "text": translator.translate(text)})
+
+    return translated

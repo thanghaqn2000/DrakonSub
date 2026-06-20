@@ -4,7 +4,10 @@ import whisper
 import argparse
 import warnings
 import tempfile
-from .utils import filename, str2bool, write_srt
+from dotenv import load_dotenv
+from .utils import filename, str2bool, write_srt, parse_srt, write_srt_entries, translate_srt_entries
+
+load_dotenv()
 
 
 def main():
@@ -27,6 +30,13 @@ def main():
                         "transcribe", "translate"], help="whether to perform X->X speech recognition ('transcribe') or X->English translation ('translate')")
     parser.add_argument("--language", type=str, default="auto", choices=["auto","af","am","ar","as","az","ba","be","bg","bn","bo","br","bs","ca","cs","cy","da","de","el","en","es","et","eu","fa","fi","fo","fr","gl","gu","ha","haw","he","hi","hr","ht","hu","hy","id","is","it","ja","jw","ka","kk","km","kn","ko","la","lb","ln","lo","lt","lv","mg","mi","mk","ml","mn","mr","ms","mt","my","ne","nl","nn","no","oc","pa","pl","ps","pt","ro","ru","sa","sd","si","sk","sl","sn","so","sq","sr","su","sv","sw","ta","te","tg","th","tk","tl","tr","tt","uk","ur","uz","vi","yi","yo","zh"], 
     help="What is the origin language of the video? If unset, it is detected automatically.")
+    parser.add_argument("--from_srt", type=str, default=None,
+                        help="use an existing .srt file instead of transcribing")
+    parser.add_argument("--translate_to", type=str, default=None,
+                        help="translate each subtitle segment to this language code (e.g. vi)")
+    parser.add_argument("--translation_engine", type=str, default="openai",
+                        choices=["openai", "google"],
+                        help="translation backend: openai (natural Vietnamese) or google")
 
     args = parser.parse_args().__dict__
     model_name: str = args.pop("model")
@@ -34,28 +44,44 @@ def main():
     output_srt: bool = args.pop("output_srt")
     srt_only: bool = args.pop("srt_only")
     language: str = args.pop("language")
-    
+    from_srt: str = args.pop("from_srt")
+    translate_to: str = args.pop("translate_to")
+    translation_engine: str = args.pop("translation_engine")
+
     os.makedirs(output_dir, exist_ok=True)
 
-    if model_name.endswith(".en"):
-        warnings.warn(
-            f"{model_name} is an English-only model, forcing English detection.")
-        args["language"] = "en"
-    # if translate task used and language argument is set, then use it
-    elif language != "auto":
-        args["language"] = language
-        
-    model = whisper.load_model(model_name)
-    audios = get_audio(args.pop("video"))
-    subtitles = get_subtitles(
-        audios, output_srt or srt_only, output_dir, lambda audio_path: model.transcribe(audio_path, **args)
-    )
+    videos = args.pop("video")
+
+    if from_srt:
+        subtitles = apply_translation(
+            from_srt, videos, output_dir, translate_to, translation_engine
+        )
+    else:
+        if model_name.endswith(".en"):
+            warnings.warn(
+                f"{model_name} is an English-only model, forcing English detection.")
+            args["language"] = "en"
+        elif language != "auto":
+            args["language"] = language
+
+        model = whisper.load_model(model_name)
+        audios = get_audio(videos)
+        subtitles = get_subtitles(
+            audios, output_srt or srt_only, output_dir, lambda audio_path: model.transcribe(audio_path, **args)
+        )
+        subtitles = {
+            path: maybe_translate_srt(
+                srt_path, translate_to, output_dir, path, translation_engine
+            )
+            for path, srt_path in subtitles.items()
+        }
 
     if srt_only:
         return
 
     for path, srt_path in subtitles.items():
-        out_path = os.path.join(output_dir, f"{filename(path)}.mp4")
+        suffix = f".{translate_to}" if translate_to else ""
+        out_path = os.path.join(output_dir, f"{filename(path)}{suffix}.mp4")
 
         print(f"Adding subtitles to {filename(path)}...")
 
@@ -109,6 +135,58 @@ def get_subtitles(audio_paths: list, output_srt: bool, output_dir: str, transcri
         subtitles_path[path] = srt_path
 
     return subtitles_path
+
+
+def maybe_translate_srt(
+    srt_path: str,
+    translate_to: str,
+    output_dir: str,
+    video_path: str,
+    translation_engine: str = "openai",
+) -> str:
+    if not translate_to:
+        return srt_path
+
+    engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
+    print(f"Translating subtitles to {translate_to} via {engine_label}...")
+    with open(srt_path, encoding="utf-8") as f:
+        entries = parse_srt(f.read())
+
+    translated = translate_srt_entries(
+        entries, target_lang=translate_to, engine=translation_engine
+    )
+    out_path = os.path.join(output_dir, f"{filename(video_path)}.{translate_to}.srt")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        write_srt_entries(translated, file=f)
+
+    return out_path
+
+
+def apply_translation(
+    from_srt: str,
+    videos: list,
+    output_dir: str,
+    translate_to: str,
+    translation_engine: str = "openai",
+) -> dict:
+    engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
+    print(f"Translating subtitles to {translate_to} via {engine_label}...")
+    with open(from_srt, encoding="utf-8") as f:
+        entries = parse_srt(f.read())
+
+    translated = translate_srt_entries(
+        entries, target_lang=translate_to, engine=translation_engine
+    )
+    subtitles = {}
+
+    for path in videos:
+        out_path = os.path.join(output_dir, f"{filename(path)}.{translate_to}.srt")
+        with open(out_path, "w", encoding="utf-8") as f:
+            write_srt_entries(translated, file=f)
+        subtitles[path] = out_path
+
+    return subtitles
 
 
 if __name__ == '__main__':

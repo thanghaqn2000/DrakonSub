@@ -61,9 +61,13 @@ def main():
     parser.add_argument("--translation_engine", type=str, default="openai",
                         choices=["openai", "google"],
                         help="translation backend: openai (natural Vietnamese) or google")
-    parser.add_argument("--topic", type=str, default=_env_str("TRANSLATION_TOPIC", DEFAULT_TOPIC),
-                        choices=sorted(TOPICS),
-                        help="translation tone/topic for OpenAI (env: TRANSLATION_TOPIC)")
+    parser.add_argument(
+        "--topic",
+        type=normalize_topic,
+        default=normalize_topic(_env_str("TRANSLATION_TOPIC", DEFAULT_TOPIC)),
+        choices=sorted(TOPICS),
+        help="translation tone/topic for OpenAI (env: TRANSLATION_TOPIC)",
+    )
     parser.add_argument("--subtitle_margin_bottom", type=float,
                         default=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
                         help="subtitle distance from bottom edge, as %% of video height (higher = further up)")
@@ -96,7 +100,7 @@ def main():
     from_srt: str = args.pop("from_srt")
     translate_to: str = args.pop("translate_to")
     translation_engine: str = args.pop("translation_engine")
-    translation_topic: str = normalize_topic(args.pop("topic"))
+    translation_topic: str = args.pop("topic")
     subtitle_margin_bottom: float = args.pop("subtitle_margin_bottom")
     subtitle_font_size: int = args.pop("subtitle_font_size")
     subtitle_font_color: str = args.pop("subtitle_font_color")

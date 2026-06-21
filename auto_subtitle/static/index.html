@@ -409,9 +409,13 @@
         const res = await fetch("/api/topics");
         if (!res.ok) return;
         const data = await res.json();
-        topicSelect.innerHTML = data.topics
-          .map((t) => `<option value="${t.id}">${t.label}</option>`)
-          .join("");
+        topicSelect.innerHTML = "";
+        data.topics.forEach((t) => {
+          const opt = document.createElement("option");
+          opt.value = t.id;
+          opt.textContent = t.label;
+          topicSelect.appendChild(opt);
+        });
         topicSelect.value = data.default;
       } catch (_) {}
     }

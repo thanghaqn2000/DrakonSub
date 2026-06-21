@@ -145,6 +145,15 @@ def srt_timestamp_to_ass(timestamp: str) -> str:
     return f"{int(hours)}:{minutes}:{seconds}.{centiseconds:02d}"
 
 
+def escape_ass_text(text: str) -> str:
+    """Escape ASS override characters in subtitle dialogue text."""
+    text = text.strip()
+    text = text.replace("\\", "\\\\")
+    text = text.replace("{", "\\{")
+    text = text.replace("}", "\\}")
+    return text.replace("\n", "\\N")
+
+
 def write_ass_for_burn(
     entries: List[dict],
     ass_path: str,
@@ -183,7 +192,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for entry in entries:
         start = srt_timestamp_to_ass(entry["start_str"])
         end = srt_timestamp_to_ass(entry["end_str"])
-        text = entry["text"].strip().replace("\n", "\\N")
+        text = escape_ass_text(entry["text"])
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     with open(ass_path, "w", encoding="utf-8") as f:
@@ -204,10 +213,12 @@ def prepare_burn_subtitles(
     with open(srt_path, encoding="utf-8") as f:
         entries = parse_srt(f.read())
 
-    ass_path = os.path.join(
-        tempfile.gettempdir(),
-        f"{filename(video_path)}.burn.ass",
+    fd, ass_path = tempfile.mkstemp(
+        prefix=f"{filename(video_path)}.",
+        suffix=".burn.ass",
+        dir=tempfile.gettempdir(),
     )
+    os.close(fd)
     write_ass_for_burn(
         entries,
         ass_path,

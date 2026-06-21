@@ -105,6 +105,9 @@ def main():
 
     videos = args.pop("video")
 
+    if output_name and len(videos) != 1:
+        parser.error("--output_name supports exactly one input video")
+
     if from_srt:
         subtitles = apply_translation(
             from_srt, videos, output_dir, translate_to, translation_engine, output_suffix

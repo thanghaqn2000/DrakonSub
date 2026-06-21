@@ -49,9 +49,12 @@ class SubtitleConfig:
     subtitle_reference_height: int = 1920
     language: str = "auto"
     task: str = "transcribe"
+    translation_topic: str = "economics"
 
     @classmethod
     def from_env(cls) -> "SubtitleConfig":
+        from .translation_topics import DEFAULT_TOPIC, normalize_topic
+
         return cls(
             subtitle_margin_bottom=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
             subtitle_font_size=_env_int("SUBTITLE_FONT_SIZE", 55),
@@ -61,6 +64,9 @@ class SubtitleConfig:
             ),
             subtitle_box_padding=_env_int("SUBTITLE_BOX_PADDING", 14),
             subtitle_reference_height=_env_int("SUBTITLE_REFERENCE_HEIGHT", 1920),
+            translation_topic=normalize_topic(
+                _env_str("TRANSLATION_TOPIC", DEFAULT_TOPIC)
+            ),
         )
 
 
@@ -117,6 +123,7 @@ def translate_srt_file(
         entries,
         target_lang=config.translate_to,
         engine=config.translation_engine,
+        topic=config.translation_topic,
     )
 
     with open(output_srt_path, "w", encoding="utf-8") as f:

@@ -1,7 +1,7 @@
 import os
 import re
 import tempfile
-from typing import Iterator, List, TextIO
+from typing import Iterator, List, Optional, TextIO
 
 
 def str2bool(string):
@@ -264,11 +264,14 @@ def translate_srt_entries(
     target_lang: str,
     source_lang: str = "en",
     engine: str = "openai",
+    topic: Optional[str] = None,
 ) -> List[dict]:
     if engine == "openai":
         from .openai_translate import translate_srt_entries_openai
 
-        return translate_srt_entries_openai(entries, target_lang=target_lang)
+        return translate_srt_entries_openai(
+            entries, target_lang=target_lang, topic=topic
+        )
 
     from deep_translator import GoogleTranslator
 

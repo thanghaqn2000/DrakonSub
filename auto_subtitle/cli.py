@@ -5,6 +5,7 @@ import argparse
 import warnings
 import tempfile
 from dotenv import load_dotenv
+from .translation_topics import DEFAULT_TOPIC, TOPICS, normalize_topic
 from .utils import (
     filename,
     str2bool,
@@ -60,6 +61,9 @@ def main():
     parser.add_argument("--translation_engine", type=str, default="openai",
                         choices=["openai", "google"],
                         help="translation backend: openai (natural Vietnamese) or google")
+    parser.add_argument("--topic", type=str, default=_env_str("TRANSLATION_TOPIC", DEFAULT_TOPIC),
+                        choices=sorted(TOPICS),
+                        help="translation tone/topic for OpenAI (env: TRANSLATION_TOPIC)")
     parser.add_argument("--subtitle_margin_bottom", type=float,
                         default=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
                         help="subtitle distance from bottom edge, as %% of video height (higher = further up)")
@@ -92,6 +96,7 @@ def main():
     from_srt: str = args.pop("from_srt")
     translate_to: str = args.pop("translate_to")
     translation_engine: str = args.pop("translation_engine")
+    translation_topic: str = normalize_topic(args.pop("topic"))
     subtitle_margin_bottom: float = args.pop("subtitle_margin_bottom")
     subtitle_font_size: int = args.pop("subtitle_font_size")
     subtitle_font_color: str = args.pop("subtitle_font_color")
@@ -110,7 +115,8 @@ def main():
 
     if from_srt:
         subtitles = apply_translation(
-            from_srt, videos, output_dir, translate_to, translation_engine, output_suffix
+            from_srt, videos, output_dir, translate_to, translation_engine,
+            output_suffix, translation_topic,
         )
     else:
         if model_name.endswith(".en"):
@@ -140,6 +146,7 @@ def main():
                 output_suffix,
                 output_name,
                 output_srt,
+                translation_topic,
             )
             for path, srt_path in subtitles.items()
         }
@@ -230,6 +237,7 @@ def maybe_translate_srt(
     output_suffix: str = "",
     output_name: str = None,
     output_srt: bool = False,
+    translation_topic: str = DEFAULT_TOPIC,
 ) -> str:
     if not translate_to:
         return srt_path
@@ -240,7 +248,10 @@ def maybe_translate_srt(
         entries = parse_srt(f.read())
 
     translated = translate_srt_entries(
-        entries, target_lang=translate_to, engine=translation_engine
+        entries,
+        target_lang=translate_to,
+        engine=translation_engine,
+        topic=translation_topic,
     )
 
     srt_dir = output_dir if output_srt else tempfile.gettempdir()
@@ -263,6 +274,7 @@ def apply_translation(
     translate_to: str,
     translation_engine: str = "openai",
     output_suffix: str = "",
+    translation_topic: str = DEFAULT_TOPIC,
 ) -> dict:
     engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
     print(f"Translating subtitles to {translate_to} via {engine_label}...")
@@ -270,7 +282,10 @@ def apply_translation(
         entries = parse_srt(f.read())
 
     translated = translate_srt_entries(
-        entries, target_lang=translate_to, engine=translation_engine
+        entries,
+        target_lang=translate_to,
+        engine=translation_engine,
+        topic=translation_topic,
     )
     subtitles = {}
     name_suffix = f".{translate_to}{output_suffix}"

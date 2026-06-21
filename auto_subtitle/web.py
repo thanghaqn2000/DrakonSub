@@ -1,5 +1,4 @@
 import os
-import re
 import tempfile
 import threading
 import uuid
@@ -14,6 +13,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .pipeline import SubtitleConfig, generate_vietsub
+from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
+from .utils import hex_color_to_ass
 
 load_dotenv()
 
@@ -38,6 +39,9 @@ class Job:
     output_path: Optional[str] = None
     error: Optional[str] = None
     input_path: Optional[str] = None
+    translation_topic: str = DEFAULT_TOPIC
+    subtitle_font_size: Optional[int] = None
+    subtitle_font_color: Optional[str] = None
 
 
 jobs: Dict[str, Job] = {}
@@ -46,15 +50,41 @@ jobs_lock = threading.Lock()
 app = FastAPI(title="DrakonSub")
 
 
-def sanitize_output_name(name: str) -> str:
-    name = name.strip()
-    if not name:
-        raise ValueError("Output name is required")
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-        raise ValueError(
-            "Output name may only contain letters, numbers, dots, dashes, and underscores"
-        )
-    return name
+def prepare_output_name(name: str, fallback: str) -> str:
+    name = (name or "").strip()
+    if name.lower().endswith(".mp4"):
+        name = name[:-4].rstrip()
+    name = os.path.basename(name)
+    return name or fallback
+
+
+def parse_font_size(value: Optional[str], default: int) -> int:
+    if value is None or not str(value).strip():
+        return default
+    size = int(value)
+    if size < 12 or size > 200:
+        raise ValueError("Font size must be between 12 and 200")
+    return size
+
+
+def parse_font_color(value: Optional[str], default: str) -> str:
+    if value is None or not str(value).strip():
+        return default
+    raw = value.strip()
+    if not raw.startswith("#"):
+        raw = f"#{raw}"
+    hex_color_to_ass(raw)
+    return raw.upper()
+
+
+def build_subtitle_config(job: Job) -> SubtitleConfig:
+    config = SubtitleConfig.from_env()
+    config.translation_topic = job.translation_topic
+    if job.subtitle_font_size is not None:
+        config.subtitle_font_size = job.subtitle_font_size
+    if job.subtitle_font_color is not None:
+        config.subtitle_font_color = job.subtitle_font_color
+    return config
 
 
 def _run_job(job_id: str) -> None:
@@ -65,18 +95,18 @@ def _run_job(job_id: str) -> None:
 
     try:
         with jobs_lock:
-            jobs[job_id].status = JobStatus.PROCESSING
-            jobs[job_id].message = "Starting..."
-            jobs[job_id].progress = 0
-            output_path = str(
-                JOBS_ROOT / job_id / f"{jobs[job_id].output_name}.mp4"
-            )
-            video_path = jobs[job_id].input_path
+            job = jobs[job_id]
+            job.status = JobStatus.PROCESSING
+            job.message = "Starting..."
+            job.progress = 0
+            output_path = str(JOBS_ROOT / job_id / f"{job.output_name}.mp4")
+            video_path = job.input_path
+            config = build_subtitle_config(job)
 
         generate_vietsub(
             video_path,
             output_path,
-            config=SubtitleConfig.from_env(),
+            config=config,
             on_progress=on_progress,
         )
 
@@ -92,10 +122,27 @@ def _run_job(job_id: str) -> None:
             jobs[job_id].message = "Failed"
 
 
+@app.get("/api/topics")
+def get_topics():
+    return {"topics": list_topics(), "default": DEFAULT_TOPIC}
+
+
+@app.get("/api/defaults")
+def get_defaults():
+    config = SubtitleConfig.from_env()
+    return {
+        "subtitle_font_size": config.subtitle_font_size,
+        "subtitle_font_color": config.subtitle_font_color,
+    }
+
+
 @app.post("/api/jobs")
 async def create_job(
     video: UploadFile = File(...),
     output_name: str = Form(...),
+    topic: str = Form(DEFAULT_TOPIC),
+    font_size: Optional[str] = Form(None),
+    font_color: Optional[str] = Form(None),
 ):
     if not video.filename:
         raise HTTPException(400, "No file uploaded")
@@ -105,9 +152,23 @@ async def create_job(
         raise HTTPException(400, "Unsupported format. Use MP4, MOV, MKV, or WEBM.")
 
     try:
-        safe_name = sanitize_output_name(output_name)
+        safe_topic = normalize_topic(topic)
+        defaults = SubtitleConfig.from_env()
+        parsed_font_size = (
+            parse_font_size(font_size, defaults.subtitle_font_size)
+            if font_size and font_size.strip()
+            else None
+        )
+        parsed_font_color = (
+            parse_font_color(font_color, defaults.subtitle_font_color)
+            if font_color and font_color.strip()
+            else None
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+    fallback_name = f"{Path(video.filename).stem}-vietsub"
+    final_name = prepare_output_name(output_name, fallback_name)
 
     job_id = str(uuid.uuid4())
     job_dir = JOBS_ROOT / job_id
@@ -118,8 +179,11 @@ async def create_job(
 
     job = Job(
         id=job_id,
-        output_name=safe_name,
+        output_name=final_name,
         input_path=str(input_path),
+        translation_topic=safe_topic,
+        subtitle_font_size=parsed_font_size,
+        subtitle_font_color=parsed_font_color,
     )
 
     with jobs_lock:
@@ -127,7 +191,7 @@ async def create_job(
 
     threading.Thread(target=_run_job, args=(job_id,), daemon=True).start()
 
-    return {"job_id": job_id, "output_name": safe_name}
+    return {"job_id": job_id, "output_name": final_name, "topic": safe_topic}
 
 
 @app.get("/api/jobs/{job_id}")

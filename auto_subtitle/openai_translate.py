@@ -3,18 +3,7 @@ import os
 import re
 from typing import List, Optional
 
-SYSTEM_PROMPT = """You translate English video subtitles into Vietnamese.
-
-Audience: general viewers, including people outside economics/finance. Content is often about economics.
-
-Rules (strict):
-- Translate each segment faithfully from the English source. Do not omit ideas, add ideas, or change meaning.
-- One English segment → exactly one Vietnamese segment, same order.
-- Do not merge or split segments.
-- Use natural, easy-to-understand Vietnamese. Slightly colloquial/friendly is fine.
-- Explain economics terms in plain language when needed; avoid stiff literal or academic wording.
-- Keep names, numbers, and proper nouns accurate.
-- Return JSON only, no markdown."""
+from .translation_topics import build_system_prompt, normalize_topic
 
 
 def _build_user_prompt(segments: List[str], target_lang: str) -> str:
@@ -52,13 +41,14 @@ def _call_openai_translate(
     model: str,
     segments: List[str],
     target_lang: str,
+    topic: str,
 ) -> List[str]:
     response = client.chat.completions.create(
         model=model,
         temperature=0.3,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt(topic)},
             {"role": "user", "content": _build_user_prompt(segments, target_lang)},
         ],
     )
@@ -73,17 +63,18 @@ def _translate_batch(
     model: str,
     segments: List[str],
     target_lang: str,
+    topic: str,
 ) -> List[str]:
     try:
-        return _call_openai_translate(client, model, segments, target_lang)
+        return _call_openai_translate(client, model, segments, target_lang, topic)
     except ValueError:
         if len(segments) == 1:
             raise
 
         mid = len(segments) // 2
         return (
-            _translate_batch(client, model, segments[:mid], target_lang)
-            + _translate_batch(client, model, segments[mid:], target_lang)
+            _translate_batch(client, model, segments[:mid], target_lang, topic)
+            + _translate_batch(client, model, segments[mid:], target_lang, topic)
         )
 
 
@@ -92,6 +83,7 @@ def translate_srt_entries_openai(
     target_lang: str = "vi",
     model: Optional[str] = None,
     batch_size: int = 15,
+    topic: Optional[str] = None,
 ) -> List[dict]:
     from openai import OpenAI
 
@@ -101,9 +93,9 @@ def translate_srt_entries_openai(
             "OPENAI_API_KEY not found. Add it to a .env file in the project directory."
         )
 
+    topic = normalize_topic(topic or os.environ.get("TRANSLATION_TOPIC"))
     client = OpenAI(api_key=api_key)
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    translated: List[dict] = []
     pending_indices: List[int] = []
     pending_texts: List[str] = []
 
@@ -113,7 +105,9 @@ def translate_srt_entries_openai(
             return
 
         print(f"  Translating segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}...")
-        batch_translations = _translate_batch(client, model, pending_texts, target_lang)
+        batch_translations = _translate_batch(
+            client, model, pending_texts, target_lang, topic
+        )
 
         for idx, vi_text in zip(pending_indices, batch_translations):
             translated[idx] = {**entries[idx], "text": vi_text}

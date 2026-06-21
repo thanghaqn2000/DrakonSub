@@ -98,6 +98,69 @@
       border-color: var(--purple);
     }
 
+    .field select {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    .field select:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1.25rem;
+    }
+
+    @media (max-width: 600px) {
+      .field-row { grid-template-columns: 1fr; }
+    }
+
+    .field-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+
+    .color-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .color-row input[type="color"] {
+      width: 2.75rem;
+      height: 2.75rem;
+      padding: 0.15rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      cursor: pointer;
+    }
+
+    .color-row input[type="text"] {
+      flex: 1;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    .color-row input[type="text"]:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+
     .actions {
       margin-top: 1.25rem;
       display: flex;
@@ -233,8 +296,33 @@
       </div>
 
       <div class="field">
+        <label for="topic">Chủ đề / giọng dịch</label>
+        <select id="topic">
+          <option value="economics">Kinh tế</option>
+          <option value="everyday">Tự nhiên đời thường</option>
+          <option value="humor">Hài hước gần gũi</option>
+        </select>
+      </div>
+
+      <div class="field">
         <label for="output-name">Tên file output (không cần .mp4)</label>
         <input type="text" id="output-name" placeholder="vid-speech-vietsub" />
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="font-size">Cỡ chữ (px)</label>
+          <input type="number" id="font-size" min="12" max="200" placeholder="55" />
+          <p class="field-hint">Để trống = mặc định</p>
+        </div>
+        <div class="field">
+          <label for="font-color">Màu chữ</label>
+          <div class="color-row">
+            <input type="color" id="font-color-picker" value="#9333EA" title="Chọn màu" />
+            <input type="text" id="font-color" placeholder="#9333EA" />
+          </div>
+          <p class="field-hint">Để trống = mặc định</p>
+        </div>
       </div>
 
       <div class="actions">
@@ -272,7 +360,11 @@
   <script>
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
+    const topicSelect = document.getElementById("topic");
     const outputName = document.getElementById("output-name");
+    const fontSize = document.getElementById("font-size");
+    const fontColor = document.getElementById("font-color");
+    const fontColorPicker = document.getElementById("font-color-picker");
     const generateBtn = document.getElementById("generate-btn");
     const downloadBtn = document.getElementById("download-btn");
     const progressWrap = document.getElementById("progress-wrap");
@@ -285,6 +377,47 @@
     let selectedFile = null;
     let inputObjectUrl = null;
     let pollTimer = null;
+    let defaultFontSize = 55;
+    let defaultFontColor = "#9333EA";
+
+    fontColorPicker.addEventListener("input", () => {
+      fontColor.value = fontColorPicker.value.toUpperCase();
+    });
+
+    fontColor.addEventListener("input", () => {
+      const v = fontColor.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
+        fontColorPicker.value = v;
+      }
+    });
+
+    async function loadDefaults() {
+      try {
+        const res = await fetch("/api/defaults");
+        if (!res.ok) return;
+        const data = await res.json();
+        defaultFontSize = data.subtitle_font_size;
+        defaultFontColor = data.subtitle_font_color;
+        fontSize.placeholder = String(defaultFontSize);
+        fontColor.placeholder = defaultFontColor;
+        fontColorPicker.value = defaultFontColor;
+      } catch (_) {}
+    }
+
+    async function loadTopics() {
+      try {
+        const res = await fetch("/api/topics");
+        if (!res.ok) return;
+        const data = await res.json();
+        topicSelect.innerHTML = data.topics
+          .map((t) => `<option value="${t.id}">${t.label}</option>`)
+          .join("");
+        topicSelect.value = data.default;
+      } catch (_) {}
+    }
+
+    loadDefaults();
+    loadTopics();
 
     function basename(name) {
       return name.replace(/\.[^/.]+$/, "");
@@ -369,10 +502,6 @@
       if (!selectedFile) return;
 
       const name = outputName.value.trim();
-      if (!name) {
-        showError("Vui lòng nhập tên file output");
-        return;
-      }
 
       clearError();
       clearOutputPreview();
@@ -384,6 +513,13 @@
       const form = new FormData();
       form.append("video", selectedFile);
       form.append("output_name", name);
+      form.append("topic", topicSelect.value);
+
+      const sizeVal = fontSize.value.trim();
+      if (sizeVal) form.append("font_size", sizeVal);
+
+      const colorVal = fontColor.value.trim();
+      if (colorVal) form.append("font_color", colorVal);
 
       try {
         const res = await fetch("/api/jobs", { method: "POST", body: form });

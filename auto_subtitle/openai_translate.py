@@ -47,6 +47,46 @@ def _parse_translations(content: str, expected_count: int) -> List[str]:
     return [str(t).strip() for t in translations]
 
 
+def _call_openai_translate(
+    client,
+    model: str,
+    segments: List[str],
+    target_lang: str,
+) -> List[str]:
+    response = client.chat.completions.create(
+        model=model,
+        temperature=0.3,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": _build_user_prompt(segments, target_lang)},
+        ],
+    )
+    return _parse_translations(
+        response.choices[0].message.content or "",
+        len(segments),
+    )
+
+
+def _translate_batch(
+    client,
+    model: str,
+    segments: List[str],
+    target_lang: str,
+) -> List[str]:
+    try:
+        return _call_openai_translate(client, model, segments, target_lang)
+    except ValueError:
+        if len(segments) == 1:
+            raise
+
+        mid = len(segments) // 2
+        return (
+            _translate_batch(client, model, segments[:mid], target_lang)
+            + _translate_batch(client, model, segments[mid:], target_lang)
+        )
+
+
 def translate_srt_entries_openai(
     entries: List[dict],
     target_lang: str = "vi",
@@ -72,22 +112,8 @@ def translate_srt_entries_openai(
         if not pending_texts:
             return
 
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0.3,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": _build_user_prompt(pending_texts, target_lang),
-                },
-            ],
-        )
-        batch_translations = _parse_translations(
-            response.choices[0].message.content or "",
-            len(pending_texts),
-        )
+        print(f"  Translating segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}...")
+        batch_translations = _translate_batch(client, model, pending_texts, target_lang)
 
         for idx, vi_text in zip(pending_indices, batch_translations):
             translated[idx] = {**entries[idx], "text": vi_text}
@@ -107,11 +133,9 @@ def translate_srt_entries_openai(
         pending_texts.append(text)
 
         if len(pending_texts) >= batch_size:
-            print(f"  Translating segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}...")
             flush_batch()
 
     if pending_texts:
-        print(f"  Translating segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}...")
         flush_batch()
 
     return translated

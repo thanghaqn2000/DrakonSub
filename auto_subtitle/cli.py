@@ -5,9 +5,32 @@ import argparse
 import warnings
 import tempfile
 from dotenv import load_dotenv
-from .utils import filename, str2bool, write_srt, parse_srt, write_srt_entries, translate_srt_entries
+from .utils import (
+    filename,
+    str2bool,
+    write_srt,
+    parse_srt,
+    write_srt_entries,
+    translate_srt_entries,
+    prepare_burn_subtitles,
+    build_word_aligned_segments,
+)
 
 load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    return int(value) if value else default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    return float(value) if value else default
+
+
+def _env_str(name: str, default: str) -> str:
+    return os.getenv(name) or default
 
 
 def main():
@@ -37,6 +60,28 @@ def main():
     parser.add_argument("--translation_engine", type=str, default="openai",
                         choices=["openai", "google"],
                         help="translation backend: openai (natural Vietnamese) or google")
+    parser.add_argument("--subtitle_margin_bottom", type=float,
+                        default=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
+                        help="subtitle distance from bottom edge, as %% of video height (higher = further up)")
+    parser.add_argument("--subtitle_font_size", type=int,
+                        default=_env_int("SUBTITLE_FONT_SIZE", 55),
+                        help="subtitle font size in pixels (env: SUBTITLE_FONT_SIZE)")
+    parser.add_argument("--subtitle_font_color", type=str,
+                        default=_env_str("SUBTITLE_FONT_COLOR", "#9333EA"),
+                        help="subtitle text color as hex, e.g. #9333EA (env: SUBTITLE_FONT_COLOR)")
+    parser.add_argument("--subtitle_background_color", type=str,
+                        default=_env_str("SUBTITLE_BACKGROUND_COLOR", "#FFFFFF"),
+                        help="subtitle background color as hex, e.g. #FFFFFF (env: SUBTITLE_BACKGROUND_COLOR)")
+    parser.add_argument("--subtitle_box_padding", type=int,
+                        default=_env_int("SUBTITLE_BOX_PADDING", 14),
+                        help="padding inside subtitle background box in pixels (env: SUBTITLE_BOX_PADDING)")
+    parser.add_argument("--subtitle_reference_height", type=int,
+                        default=_env_int("SUBTITLE_REFERENCE_HEIGHT", 1920),
+                        help="reference video height for font scaling, e.g. 1920 for vertical reels (env: SUBTITLE_REFERENCE_HEIGHT)")
+    parser.add_argument("--output_suffix", type=str, default="",
+                        help="extra suffix before extension, e.g. '_new' -> video.vi_new.mp4")
+    parser.add_argument("--output_name", type=str, default=None,
+                        help="custom output video basename without extension, e.g. vid-speech-vietsub")
 
     args = parser.parse_args().__dict__
     model_name: str = args.pop("model")
@@ -47,6 +92,14 @@ def main():
     from_srt: str = args.pop("from_srt")
     translate_to: str = args.pop("translate_to")
     translation_engine: str = args.pop("translation_engine")
+    subtitle_margin_bottom: float = args.pop("subtitle_margin_bottom")
+    subtitle_font_size: int = args.pop("subtitle_font_size")
+    subtitle_font_color: str = args.pop("subtitle_font_color")
+    subtitle_background_color: str = args.pop("subtitle_background_color")
+    subtitle_box_padding: int = args.pop("subtitle_box_padding")
+    subtitle_reference_height: int = args.pop("subtitle_reference_height")
+    output_suffix: str = args.pop("output_suffix")
+    output_name: str = args.pop("output_name")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -54,7 +107,7 @@ def main():
 
     if from_srt:
         subtitles = apply_translation(
-            from_srt, videos, output_dir, translate_to, translation_engine
+            from_srt, videos, output_dir, translate_to, translation_engine, output_suffix
         )
     else:
         if model_name.endswith(".en"):
@@ -67,11 +120,23 @@ def main():
         model = whisper.load_model(model_name)
         audios = get_audio(videos)
         subtitles = get_subtitles(
-            audios, output_srt or srt_only, output_dir, lambda audio_path: model.transcribe(audio_path, **args)
+            audios,
+            output_srt or srt_only,
+            output_dir,
+            lambda audio_path: model.transcribe(
+                audio_path, word_timestamps=True, **args
+            ),
         )
         subtitles = {
             path: maybe_translate_srt(
-                srt_path, translate_to, output_dir, path, translation_engine
+                srt_path,
+                translate_to,
+                output_dir,
+                path,
+                translation_engine,
+                output_suffix,
+                output_name,
+                output_srt,
             )
             for path, srt_path in subtitles.items()
         }
@@ -80,16 +145,30 @@ def main():
         return
 
     for path, srt_path in subtitles.items():
-        suffix = f".{translate_to}" if translate_to else ""
-        out_path = os.path.join(output_dir, f"{filename(path)}{suffix}.mp4")
+        if output_name:
+            out_path = os.path.join(output_dir, f"{output_name}.mp4")
+        else:
+            lang_suffix = f".{translate_to}" if translate_to else ""
+            name_suffix = f"{lang_suffix}{output_suffix}" if output_suffix else lang_suffix
+            out_path = os.path.join(output_dir, f"{filename(path)}{name_suffix}.mp4")
 
         print(f"Adding subtitles to {filename(path)}...")
 
         video = ffmpeg.input(path)
         audio = video.audio
+        ass_path = prepare_burn_subtitles(
+            srt_path,
+            path,
+            subtitle_margin_bottom,
+            subtitle_font_size,
+            subtitle_font_color,
+            subtitle_background_color,
+            subtitle_box_padding,
+            subtitle_reference_height,
+        )
 
         ffmpeg.concat(
-            video.filter('subtitles', srt_path, force_style="OutlineColour=&H40000000,BorderStyle=3"), audio, v=1, a=1
+            video.filter("subtitles", ass_path), audio, v=1, a=1
         ).output(out_path).run(quiet=True, overwrite_output=True)
 
         print(f"Saved subtitled video to {os.path.abspath(out_path)}.")
@@ -129,8 +208,10 @@ def get_subtitles(audio_paths: list, output_srt: bool, output_dir: str, transcri
         result = transcribe(audio_path)
         warnings.filterwarnings("default")
 
+        segments = build_word_aligned_segments(result["segments"])
+
         with open(srt_path, "w", encoding="utf-8") as srt:
-            write_srt(result["segments"], file=srt)
+            write_srt(segments, file=srt)
 
         subtitles_path[path] = srt_path
 
@@ -143,6 +224,9 @@ def maybe_translate_srt(
     output_dir: str,
     video_path: str,
     translation_engine: str = "openai",
+    output_suffix: str = "",
+    output_name: str = None,
+    output_srt: bool = False,
 ) -> str:
     if not translate_to:
         return srt_path
@@ -155,7 +239,13 @@ def maybe_translate_srt(
     translated = translate_srt_entries(
         entries, target_lang=translate_to, engine=translation_engine
     )
-    out_path = os.path.join(output_dir, f"{filename(video_path)}.{translate_to}.srt")
+
+    srt_dir = output_dir if output_srt else tempfile.gettempdir()
+    if output_name:
+        out_path = os.path.join(srt_dir, f"{output_name}.srt")
+    else:
+        name_suffix = f".{translate_to}{output_suffix}"
+        out_path = os.path.join(srt_dir, f"{filename(video_path)}{name_suffix}.srt")
 
     with open(out_path, "w", encoding="utf-8") as f:
         write_srt_entries(translated, file=f)
@@ -169,6 +259,7 @@ def apply_translation(
     output_dir: str,
     translate_to: str,
     translation_engine: str = "openai",
+    output_suffix: str = "",
 ) -> dict:
     engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
     print(f"Translating subtitles to {translate_to} via {engine_label}...")
@@ -179,14 +270,48 @@ def apply_translation(
         entries, target_lang=translate_to, engine=translation_engine
     )
     subtitles = {}
+    name_suffix = f".{translate_to}{output_suffix}"
 
     for path in videos:
-        out_path = os.path.join(output_dir, f"{filename(path)}.{translate_to}.srt")
+        out_path = os.path.join(output_dir, f"{filename(path)}{name_suffix}.srt")
         with open(out_path, "w", encoding="utf-8") as f:
             write_srt_entries(translated, file=f)
         subtitles[path] = out_path
 
     return subtitles
+
+
+def simple_main():
+    import sys
+
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: auto_sub <video_path> [options]")
+        print("Example: auto_sub /path/to/vid-speech.mp4")
+        print("Output:  /path/to/vid-speech-vietsub.mp4")
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 1)
+
+    video_path = os.path.abspath(sys.argv[1])
+    if not os.path.isfile(video_path):
+        print(f"Error: file not found: {video_path}")
+        sys.exit(1)
+
+    output_dir = os.path.dirname(video_path) or "."
+    output_name = f"{filename(video_path)}-vietsub"
+
+    sys.argv = [
+        "auto_sub",
+        video_path,
+        "--translate_to",
+        "vi",
+        "--output_srt",
+        "false",
+        "-o",
+        output_dir,
+        "--output_name",
+        output_name,
+        *sys.argv[2:],
+    ]
+    main()
 
 
 if __name__ == '__main__':

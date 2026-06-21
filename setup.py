@@ -15,7 +15,10 @@ setup(
     ],
     description="Automatically generate and embed subtitles into your videos",
     entry_points={
-        'console_scripts': ['auto_subtitle=auto_subtitle.cli:main'],
+        'console_scripts': [
+            'auto_subtitle=auto_subtitle.cli:main',
+            'auto_sub=auto_subtitle.cli:simple_main',
+        ],
     },
     include_package_data=True,
 )

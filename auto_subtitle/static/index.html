@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DrakonSub</title>
+  <style>
+    :root {
+      --purple: #9333ea;
+      --purple-dark: #7e22ce;
+      --bg: #0f0f12;
+      --surface: #1a1a22;
+      --border: #2a2a36;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 1.25rem 2rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    header h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--purple);
+    }
+
+    header span { color: var(--muted); font-size: 0.9rem; }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 3rem;
+    }
+
+    .controls {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--purple);
+      background: rgba(147, 51, 234, 0.06);
+    }
+
+    .upload-zone p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; }
+
+    #file-input { display: none; }
+
+    .field {
+      margin-top: 1.25rem;
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .field input {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+
+    .actions {
+      margin-top: 1.25rem;
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      padding: 0.7rem 1.4rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--purple);
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) { background: var(--purple-dark); }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .progress-wrap {
+      margin-top: 1.25rem;
+      display: none;
+    }
+
+    .progress-wrap.visible { display: block; }
+
+    .progress-bar {
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--purple);
+      transition: width 0.3s;
+    }
+
+    .progress-text {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .error {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 8px;
+      color: #fca5a5;
+      display: none;
+    }
+
+    .error.visible { display: block; }
+
+    .previews {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 768px) {
+      .previews { grid-template-columns: 1fr; }
+    }
+
+    .preview-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .preview-card h2 {
+      padding: 0.85rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .preview-body {
+      aspect-ratio: 9 / 16;
+      max-height: 520px;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .preview-body video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .placeholder {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      padding: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>DrakonSub</h1>
+    <span>Auto Vietnamese subtitles</span>
+  </header>
+
+  <main>
+    <section class="controls">
+      <div class="upload-zone" id="upload-zone">
+        <strong>Chọn hoặc kéo thả video</strong>
+        <p>MP4, MOV, MKV, WEBM</p>
+        <input type="file" id="file-input" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,.mp4,.mov,.mkv,.webm" />
+      </div>
+
+      <div class="field">
+        <label for="output-name">Tên file output (không cần .mp4)</label>
+        <input type="text" id="output-name" placeholder="vid-speech-vietsub" />
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" id="generate-btn" disabled>Generate</button>
+        <button class="btn-secondary" id="download-btn" disabled hidden>Download</button>
+      </div>
+
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <p class="progress-text" id="progress-text">Waiting...</p>
+      </div>
+
+      <p class="error" id="error-box"></p>
+    </section>
+
+    <section class="previews">
+      <div class="preview-card">
+        <h2>Preview — Video gốc</h2>
+        <div class="preview-body" id="input-preview">
+          <p class="placeholder">Chưa có video</p>
+        </div>
+      </div>
+
+      <div class="preview-card">
+        <h2>Preview — Video vietsub</h2>
+        <div class="preview-body" id="output-preview">
+          <p class="placeholder">Generate xong sẽ hiện ở đây</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const uploadZone = document.getElementById("upload-zone");
+    const fileInput = document.getElementById("file-input");
+    const outputName = document.getElementById("output-name");
+    const generateBtn = document.getElementById("generate-btn");
+    const downloadBtn = document.getElementById("download-btn");
+    const progressWrap = document.getElementById("progress-wrap");
+    const progressFill = document.getElementById("progress-fill");
+    const progressText = document.getElementById("progress-text");
+    const errorBox = document.getElementById("error-box");
+    const inputPreview = document.getElementById("input-preview");
+    const outputPreview = document.getElementById("output-preview");
+
+    let selectedFile = null;
+    let inputObjectUrl = null;
+    let pollTimer = null;
+
+    function basename(name) {
+      return name.replace(/\.[^/.]+$/, "");
+    }
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.add("visible");
+    }
+
+    function clearError() {
+      errorBox.classList.remove("visible");
+      errorBox.textContent = "";
+    }
+
+    function setInputPreview(file) {
+      if (inputObjectUrl) URL.revokeObjectURL(inputObjectUrl);
+      inputObjectUrl = URL.createObjectURL(file);
+      inputPreview.innerHTML = `<video src="${inputObjectUrl}" controls playsinline></video>`;
+    }
+
+    function clearOutputPreview() {
+      outputPreview.innerHTML = `<p class="placeholder">Generate xong sẽ hiện ở đây</p>`;
+      downloadBtn.hidden = true;
+      downloadBtn.disabled = true;
+    }
+
+    function setOutputPreview(previewUrl, downloadUrl) {
+      outputPreview.innerHTML = `<video src="${previewUrl}" controls playsinline></video>`;
+      downloadBtn.hidden = false;
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = () => { window.location.href = downloadUrl; };
+    }
+
+    function handleFile(file) {
+      if (!file) return;
+      selectedFile = file;
+      setInputPreview(file);
+      outputName.value = `${basename(file.name)}-vietsub`;
+      generateBtn.disabled = false;
+      clearOutputPreview();
+      clearError();
+    }
+
+    uploadZone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
+
+    uploadZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadZone.classList.add("dragover");
+    });
+    uploadZone.addEventListener("dragleave", () => uploadZone.classList.remove("dragover"));
+    uploadZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove("dragover");
+      handleFile(e.dataTransfer.files[0]);
+    });
+
+    async function pollJob(jobId) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) throw new Error("Failed to get job status");
+      const data = await res.json();
+
+      progressFill.style.width = `${data.progress}%`;
+      progressText.textContent = `${data.message} (${data.progress}%)`;
+
+      if (data.status === "done") {
+        clearInterval(pollTimer);
+        generateBtn.disabled = false;
+        setOutputPreview(data.preview_url, data.download_url);
+        return;
+      }
+
+      if (data.status === "error") {
+        clearInterval(pollTimer);
+        generateBtn.disabled = false;
+        showError(data.error || "Processing failed");
+      }
+    }
+
+    generateBtn.addEventListener("click", async () => {
+      if (!selectedFile) return;
+
+      const name = outputName.value.trim();
+      if (!name) {
+        showError("Vui lòng nhập tên file output");
+        return;
+      }
+
+      clearError();
+      clearOutputPreview();
+      generateBtn.disabled = true;
+      progressWrap.classList.add("visible");
+      progressFill.style.width = "0%";
+      progressText.textContent = "Uploading...";
+
+      const form = new FormData();
+      form.append("video", selectedFile);
+      form.append("output_name", name);
+
+      try {
+        const res = await fetch("/api/jobs", { method: "POST", body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Upload failed");
+
+        pollTimer = setInterval(() => pollJob(data.job_id), 1500);
+        pollJob(data.job_id);
+      } catch (err) {
+        generateBtn.disabled = false;
+        showError(err.message);
+      }
+    });
+  </script>
+</body>
+</html>

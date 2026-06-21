@@ -12,13 +12,17 @@ setup(
         'deep-translator',
         'openai',
         'python-dotenv',
+        'fastapi',
+        'uvicorn[standard]',
+        'python-multipart',
     ],
     description="Automatically generate and embed subtitles into your videos",
     entry_points={
         'console_scripts': [
             'auto_subtitle=auto_subtitle.cli:main',
             'auto_sub=auto_subtitle.cli:simple_main',
+            'drakonsub-web=auto_subtitle.web:main',
         ],
     },
-    include_package_data=True,
+    package_data={'auto_subtitle': ['static/*']},
 )

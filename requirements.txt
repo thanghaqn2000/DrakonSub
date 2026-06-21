@@ -3,3 +3,6 @@ ffmpeg-python
 deep-translator
 openai
 python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart

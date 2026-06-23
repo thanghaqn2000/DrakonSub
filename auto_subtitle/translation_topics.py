@@ -3,12 +3,35 @@ from typing import Dict, List, Optional
 
 DEFAULT_TOPIC = "economics"
 
-_BASE_RULES = """Rules (strict):
-- Translate each segment faithfully from the English source. Do not omit ideas, add ideas, or change meaning.
-- One English segment → exactly one Vietnamese segment, same order.
-- Do not merge or split segments.
-- Keep names, numbers, and proper nouns accurate.
-- Return JSON only, no markdown."""
+_SUBTITLE_CORE = """You are a professional Vietnamese subtitle translator for short-form video (YouTube, TikTok, Reels).
+
+How you write:
+- Natural, easy-to-understand Vietnamese — the way viewers actually read subtitles while watching.
+- Prioritize meaning and flow over word-by-word translation.
+- You may restructure sentences so Vietnamese sounds smooth and spoken.
+- Keep the original meaning: do not add ideas, omit ideas, or change facts.
+- Short, readable lines suited to on-screen subtitles; concise when possible without losing meaning.
+- Keep names, numbers, tickers, and proper nouns accurate.
+
+Segment rules:
+- Input is a numbered list of subtitle cues (timing is handled separately).
+- Output exactly one Vietnamese subtitle per input cue, same order, same count.
+- Each output line must stand alone as a subtitle — do not merge or split cues.
+- Read surrounding cues for context, then rewrite each line naturally.
+
+Output: JSON only, no markdown."""
+
+_ECONOMICS_GLOSSARY = """Terminology guide (economics / investing / crypto — use plain Vietnamese viewers understand):
+- bull market → thị trường tăng giá
+- bear market → thị trường giảm giá
+- interest rate → lãi suất
+- inflation → lạm phát
+- liquidity → thanh khoản
+- Bitcoin → Bitcoin
+- crypto → tiền mã hóa (or "crypto" when it sounds natural in context)
+- Fed → Fed / Cục Dự trữ Liên bang Mỹ
+- ETF → ETF
+- halving → halving (or "sự kiện giảm một nửa phần thưởng đào Bitcoin" when context needs a brief explanation)"""
 
 
 @dataclass(frozen=True)
@@ -16,40 +39,56 @@ class TranslationTopic:
     id: str
     label: str
     guidance: str
+    glossary: str = ""
 
 
 TOPICS: Dict[str, TranslationTopic] = {
     "economics": TranslationTopic(
         id="economics",
-        label="Kinh tế",
+        label="Kinh tế & đầu tư",
         guidance=(
-            "Audience: general viewers, including people outside economics/finance. "
-            "Content is often about economics.\n"
-            "- Use natural, easy-to-understand Vietnamese. Slightly colloquial/friendly is fine.\n"
-            "- Explain economics terms in plain language when needed; avoid stiff literal or academic wording."
+            "Content is often about economics, markets, Bitcoin, crypto, and investing.\n"
+            "- Speak to general Vietnamese viewers, including people outside finance.\n"
+            "- Prefer common, accessible terms over stiff academic or literal wording.\n"
+            "- Explain jargon briefly in natural Vietnamese when it helps comprehension.\n"
+            "- Tone: clear, confident, easy to follow on mobile — like a good finance creator's subtitles."
         ),
+        glossary=_ECONOMICS_GLOSSARY,
     ),
     "everyday": TranslationTopic(
         id="everyday",
         label="Tự nhiên đời thường",
         guidance=(
-            "Audience: general viewers watching everyday-life content (vlogs, stories, daily tips, education).\n"
+            "Everyday-life content: vlogs, stories, tips, education.\n"
             "- Use natural spoken Vietnamese as people talk in daily life.\n"
-            "- Avoid economics jargon unless the source explicitly uses it; prefer plain, relatable wording.\n"
-            "- Keep a warm, clear tone — easy to follow on mobile."
+            "- Warm, clear tone — easy to follow on mobile.\n"
+            "- Avoid heavy finance jargon unless the source explicitly uses it."
         ),
     ),
     "humor": TranslationTopic(
         id="humor",
         label="Hài hước gần gũi",
         guidance=(
-            "Audience: general viewers watching light, funny, or casual content.\n"
-            "- Use friendly, playful Vietnamese that feels close and conversational.\n"
+            "Light, funny, or casual content.\n"
+            "- Friendly, conversational Vietnamese that feels close to the viewer.\n"
             "- Preserve humor and timing when possible; mild colloquial flair is welcome.\n"
-            "- Do not invent jokes or exaggerate — stay faithful to the original meaning and energy."
+            "- Do not invent jokes or exaggerate — stay faithful to the original energy."
         ),
     ),
 }
+
+POLISH_SYSTEM_PROMPT = """You are a Vietnamese subtitle editor polishing machine-translated or draft subtitles.
+
+Your job:
+- Fix stiff, literal, or "translationese" phrasing — sound like native subtitles, not a dictionary.
+- Make lines shorter and easier to read on screen when possible, without losing meaning.
+- Keep natural spoken Vietnamese suited to short video.
+- Preserve facts, numbers, names, tickers, and the original meaning exactly.
+- Do not add ideas, remove ideas, or change segment count.
+
+Output rules:
+- Exactly one polished subtitle string per input line, same order, same count.
+- Return JSON only, no markdown."""
 
 
 def normalize_topic(topic: Optional[str]) -> str:
@@ -65,12 +104,26 @@ def normalize_topic(topic: Optional[str]) -> str:
 def build_system_prompt(topic: Optional[str] = None) -> str:
     topic_id = normalize_topic(topic)
     topic_def = TOPICS[topic_id]
-    return (
-        "You translate English video subtitles into Vietnamese.\n\n"
-        f"Topic / tone: {topic_def.label}\n"
-        f"{topic_def.guidance}\n\n"
-        f"{_BASE_RULES}"
-    )
+    parts = [
+        _SUBTITLE_CORE,
+        f"\nTopic / tone: {topic_def.label}",
+        topic_def.guidance,
+    ]
+    if topic_def.glossary:
+        parts.append(f"\n{topic_def.glossary}")
+    return "\n".join(parts)
+
+
+def build_polish_system_prompt(topic: Optional[str] = None) -> str:
+    topic_id = normalize_topic(topic)
+    topic_def = TOPICS[topic_id]
+    extra = ""
+    if topic_def.glossary:
+        extra = (
+            f"\n\nContext: {topic_def.label} content. "
+            "Keep terminology consistent with standard Vietnamese finance/crypto usage."
+        )
+    return POLISH_SYSTEM_PROMPT + extra
 
 
 def list_topics() -> List[dict]:

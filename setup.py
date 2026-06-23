@@ -15,6 +15,7 @@ setup(
         'fastapi',
         'uvicorn[standard]',
         'python-multipart',
+        'transformers',
     ],
     description="Automatically generate and embed subtitles into your videos",
     entry_points={

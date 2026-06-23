@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Optional
 
-from dotenv import load_dotenv
+from .config import get_openai_model, load_env
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +16,7 @@ from .pipeline import SubtitleConfig, generate_vietsub
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
 from .utils import hex_color_to_ass
 
-load_dotenv()
+load_env()
 
 STATIC_DIR = Path(__file__).parent / "static"
 JOBS_ROOT = Path(tempfile.gettempdir()) / "drakonsub_jobs"
@@ -42,6 +42,7 @@ class Job:
     translation_topic: str = DEFAULT_TOPIC
     subtitle_font_size: Optional[int] = None
     subtitle_font_color: Optional[str] = None
+    source_language: str = "en"
 
 
 jobs: Dict[str, Job] = {}
@@ -80,6 +81,7 @@ def parse_font_color(value: Optional[str], default: str) -> str:
 def build_subtitle_config(job: Job) -> SubtitleConfig:
     config = SubtitleConfig.from_env()
     config.translation_topic = job.translation_topic
+    config.source_language = job.source_language
     if job.subtitle_font_size is not None:
         config.subtitle_font_size = job.subtitle_font_size
     if job.subtitle_font_color is not None:
@@ -133,6 +135,7 @@ def get_defaults():
     return {
         "subtitle_font_size": config.subtitle_font_size,
         "subtitle_font_color": config.subtitle_font_color,
+        "openai_model": get_openai_model(),
     }
 
 
@@ -143,6 +146,7 @@ async def create_job(
     topic: str = Form(DEFAULT_TOPIC),
     font_size: Optional[str] = Form(None),
     font_color: Optional[str] = Form(None),
+    source_language: str = Form("en"),
 ):
     if not video.filename:
         raise HTTPException(400, "No file uploaded")
@@ -153,6 +157,8 @@ async def create_job(
 
     try:
         safe_topic = normalize_topic(topic)
+        if source_language not in ("en", "vi"):
+            raise ValueError("source_language must be 'en' or 'vi'")
         defaults = SubtitleConfig.from_env()
         parsed_font_size = (
             parse_font_size(font_size, defaults.subtitle_font_size)
@@ -184,6 +190,7 @@ async def create_job(
         translation_topic=safe_topic,
         subtitle_font_size=parsed_font_size,
         subtitle_font_color=parsed_font_color,
+        source_language=source_language,
     )
 
     with jobs_lock:
@@ -266,7 +273,9 @@ def main():
     host = os.getenv("DRAKONSUB_HOST", "127.0.0.1")
     port = int(os.getenv("DRAKONSUB_PORT", "8000"))
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    model = get_openai_model()
     print(f"DrakonSub web UI: http://{host}:{port}")
+    print(f"OpenAI model: {model}")
     uvicorn.run(app, host=host, port=port)
 
 

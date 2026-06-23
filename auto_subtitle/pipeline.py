@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 import ffmpeg
 import whisper
-from dotenv import load_dotenv
+from .config import load_env
 
 from .utils import (
     write_srt,
@@ -15,9 +15,10 @@ from .utils import (
     translate_srt_entries,
     prepare_burn_subtitles,
     build_word_aligned_segments,
+    str2bool,
 )
 
-load_dotenv()
+load_env()
 
 ProgressCallback = Callable[[str, int], None]
 
@@ -50,6 +51,8 @@ class SubtitleConfig:
     language: str = "auto"
     task: str = "transcribe"
     translation_topic: str = "economics"
+    source_language: str = "en"  # "en" or "vi"
+    vi_loanword_openai: bool = True
 
     @classmethod
     def from_env(cls) -> "SubtitleConfig":
@@ -66,6 +69,9 @@ class SubtitleConfig:
             subtitle_reference_height=_env_int("SUBTITLE_REFERENCE_HEIGHT", 1920),
             translation_topic=normalize_topic(
                 _env_str("TRANSLATION_TOPIC", DEFAULT_TOPIC)
+            ),
+            vi_loanword_openai=str2bool(
+                _env_str("VI_LOANWORD_OPENAI_FIX", "true")
             ),
         )
 
@@ -90,6 +96,19 @@ def transcribe_to_srt(
     config: SubtitleConfig,
     on_progress: Optional[ProgressCallback] = None,
 ) -> None:
+    """Transcribe audio to SRT using the backend appropriate for source_language."""
+    if config.source_language == "vi":
+        _transcribe_vi_to_srt(audio_path, srt_path, config, on_progress)
+    else:
+        _transcribe_en_to_srt(audio_path, srt_path, config, on_progress)
+
+
+def _transcribe_en_to_srt(
+    audio_path: str,
+    srt_path: str,
+    config: SubtitleConfig,
+    on_progress: Optional[ProgressCallback] = None,
+) -> None:
     transcribe_args = {"task": config.task}
     if config.model.endswith(".en"):
         transcribe_args["language"] = "en"
@@ -105,6 +124,20 @@ def transcribe_to_srt(
     warnings.filterwarnings("default")
 
     segments = build_word_aligned_segments(result["segments"])
+    with open(srt_path, "w", encoding="utf-8") as srt:
+        write_srt(segments, file=srt)
+
+
+def _transcribe_vi_to_srt(
+    audio_path: str,
+    srt_path: str,
+    config: SubtitleConfig,
+    on_progress: Optional[ProgressCallback] = None,
+) -> None:
+    from .phowhisper_transcribe import DEFAULT_VI_MODEL, transcribe_vi
+
+    segments_raw = transcribe_vi(audio_path, model_name=DEFAULT_VI_MODEL, on_progress=on_progress)
+    segments = build_word_aligned_segments(segments_raw)
     with open(srt_path, "w", encoding="utf-8") as srt:
         write_srt(segments, file=srt)
 
@@ -130,6 +163,28 @@ def translate_srt_file(
         write_srt_entries(translated, file=f)
 
     return output_srt_path
+
+
+def fix_vi_loanwords_file(
+    srt_path: str,
+    config: SubtitleConfig,
+    on_progress: Optional[ProgressCallback] = None,
+) -> str:
+    from .vi_loanword_fix import fix_vi_srt_entries
+
+    with open(srt_path, encoding="utf-8") as f:
+        entries = parse_srt(f.read())
+
+    fixed = fix_vi_srt_entries(
+        entries,
+        use_openai=config.vi_loanword_openai,
+        on_progress=on_progress,
+    )
+
+    with open(srt_path, "w", encoding="utf-8") as f:
+        write_srt_entries(fixed, file=f)
+
+    return srt_path
 
 
 def burn_subtitles(
@@ -170,7 +225,7 @@ def generate_vietsub(
     config: Optional[SubtitleConfig] = None,
     on_progress: Optional[ProgressCallback] = None,
 ) -> str:
-    """Full pipeline: transcribe EN → translate VI → burn subtitles."""
+    """Full pipeline: transcribe → (translate if EN) → burn subtitles."""
     config = config or SubtitleConfig.from_env()
     work_dir = tempfile.mkdtemp(prefix="drakonsub_")
 
@@ -178,11 +233,15 @@ def generate_vietsub(
     audio_path = os.path.join(work_dir, "audio.wav")
     extract_audio(video_path, audio_path)
 
-    en_srt = os.path.join(work_dir, "en.srt")
-    transcribe_to_srt(audio_path, en_srt, config, on_progress)
+    srt_path = os.path.join(work_dir, "source.srt")
+    transcribe_to_srt(audio_path, srt_path, config, on_progress)
 
-    vi_srt = os.path.join(work_dir, "vi.srt")
-    translate_srt_file(en_srt, vi_srt, config, on_progress)
+    if config.source_language == "vi":
+        fix_vi_loanwords_file(srt_path, config, on_progress)
+        final_srt = srt_path
+    else:
+        final_srt = os.path.join(work_dir, "vi.srt")
+        translate_srt_file(srt_path, final_srt, config, on_progress)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    return burn_subtitles(video_path, vi_srt, output_path, config, on_progress)
+    return burn_subtitles(video_path, final_srt, output_path, config, on_progress)

@@ -113,6 +113,42 @@
       border-color: var(--purple);
     }
 
+    .radio-group {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 0.4rem;
+    }
+
+    .radio-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      transition: border-color 0.2s, background 0.2s;
+      user-select: none;
+    }
+
+    .radio-btn input[type="radio"] { display: none; }
+
+    .radio-btn:hover {
+      border-color: var(--purple);
+    }
+
+    .radio-btn.active {
+      border-color: var(--purple);
+      background: rgba(147, 51, 234, 0.1);
+      color: #c084fc;
+      font-weight: 600;
+    }
+
+    .hidden { display: none !important; }
+
     .field-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -296,6 +332,20 @@
       </div>
 
       <div class="field">
+        <label>Ngôn ngữ video</label>
+        <div class="radio-group">
+          <label class="radio-btn active" id="lang-en-btn">
+            <input type="radio" name="source_language" value="en" checked />
+            🇬🇧 Tiếng Anh
+          </label>
+          <label class="radio-btn" id="lang-vi-btn">
+            <input type="radio" name="source_language" value="vi" />
+            🇻🇳 Tiếng Việt
+          </label>
+        </div>
+      </div>
+
+      <div class="field" id="topic-field">
         <label for="topic">Chủ đề / giọng dịch</label>
         <select id="topic">
           <option value="economics">Kinh tế</option>
@@ -361,6 +411,7 @@
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
     const topicSelect = document.getElementById("topic");
+    const topicField = document.getElementById("topic-field");
     const outputName = document.getElementById("output-name");
     const fontSize = document.getElementById("font-size");
     const fontColor = document.getElementById("font-color");
@@ -379,6 +430,17 @@
     let pollTimer = null;
     let defaultFontSize = 55;
     let defaultFontColor = "#9333EA";
+    let sourceLang = "en";
+
+    // Radio button logic
+    document.querySelectorAll('input[name="source_language"]').forEach((radio) => {
+      radio.addEventListener("change", () => {
+        sourceLang = radio.value;
+        document.getElementById("lang-en-btn").classList.toggle("active", sourceLang === "en");
+        document.getElementById("lang-vi-btn").classList.toggle("active", sourceLang === "vi");
+        topicField.classList.toggle("hidden", sourceLang === "vi");
+      });
+    });
 
     fontColorPicker.addEventListener("input", () => {
       fontColor.value = fontColorPicker.value.toUpperCase();
@@ -518,6 +580,7 @@
       form.append("video", selectedFile);
       form.append("output_name", name);
       form.append("topic", topicSelect.value);
+      form.append("source_language", sourceLang);
 
       const sizeVal = fontSize.value.trim();
       if (sizeVal) form.append("font_size", sizeVal);

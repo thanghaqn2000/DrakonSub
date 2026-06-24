@@ -38,7 +38,10 @@ def _group_cues_by_sentence(
 
     for i, text in enumerate(texts):
         current.append(i)
-        last_char = text.strip()[-1:] if text.strip() else ""
+        # Strip trailing closing punctuation (quotes, brackets) so that cues
+        # like  'like stocks."'  or  'like stocks.)'  still close the group.
+        inner = text.strip().rstrip("\"')}]")
+        last_char = inner[-1:] if inner else ""
         if last_char in _SENTENCE_END_CHARS or len(current) >= max_cues_per_group:
             groups.append(current)
             current = []
@@ -93,6 +96,8 @@ def _build_grouped_user_prompt(
 
     Groups are shown as labelled sections so the model can read each group
     as a coherent thought before translating its individual cues.
+    Each cue is numbered sequentially across the whole batch so the model
+    emits a flat ``translations`` JSON array of the same length.
     """
     total_cues = sum(len(g) for g in batch_groups)
     n_groups = len(batch_groups)
@@ -101,12 +106,12 @@ def _build_grouped_user_prompt(
         f"You receive {total_cues} English subtitle cue{'s' if total_cues != 1 else ''} "
         f"from a video, organised into {n_groups} phrase group{'s' if n_groups != 1 else ''}.\n\n"
         "Read each group as a COMPLETE THOUGHT before translating. "
-        "Use the full group context to write natural, idiomatic Vietnamese subtitles "
+        f"Use the full group context to write natural, idiomatic {target_lang} subtitles "
         "— NOT word-by-word translation.\n\n"
         "Rules:\n"
-        "- Output exactly 1 Vietnamese line per input cue, same order\n"
+        f"- Output exactly 1 {target_lang} line per input cue, same order\n"
         "- Do NOT merge, skip, or reorder cues\n"
-        "- Vietnamese must flow naturally as a subtitle read on screen\n"
+        f"- {target_lang} text must flow naturally as a subtitle read on screen\n"
         "- Each line must be self-contained and readable on its own\n"
     )
 
@@ -128,6 +133,7 @@ def _build_grouped_user_prompt(
 
 
 def _build_polish_user_prompt(segments: List[str]) -> str:
+    """Build the user prompt asking the model to polish Vietnamese subtitle lines."""
     lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
     n = len(segments)
     return (
@@ -146,6 +152,13 @@ def _build_polish_user_prompt(segments: List[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _parse_json_strings(content: str, key: str, expected_count: int) -> List[str]:
+    """
+    Parse a JSON string returned by OpenAI and extract a string array.
+
+    Strips optional markdown code fences, loads the JSON, locates the array
+    under *key*, and validates that exactly *expected_count* strings are
+    present.  Raises ``ValueError`` on any mismatch.
+    """
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*", "", content)
@@ -174,7 +187,13 @@ def _call_openai_translate_grouped(
     target_lang: str,
     topic: str,
 ) -> List[str]:
-    """Translate a batch of phrase groups in a single API call."""
+    """
+    Translate a batch of phrase groups in a single OpenAI API call.
+
+    Builds a grouped prompt that shows each group as a labelled block,
+    calls the model, and returns a flat list of translated strings in the
+    same order as the input cues across all groups.
+    """
     total_cues = sum(len(g) for g in batch_groups)
     response = create_chat_completion(
         client,
@@ -240,6 +259,7 @@ def _call_openai_polish(
     segments: List[str],
     topic: str,
 ) -> List[str]:
+    """Call OpenAI to polish a flat list of Vietnamese subtitle segments."""
     response = create_chat_completion(
         client,
         model,
@@ -340,6 +360,12 @@ def _polish_translations(
     topic: str,
     batch_size: int,
 ) -> List[str]:
+    """
+    Run a polish pass over all translated texts in *batch_size* chunks.
+
+    Empty strings are passed through unchanged.  Returns a list of the
+    same length as *texts* with each line polished in place.
+    """
     polished: List[Optional[str]] = [None] * len(texts)
     pending_indices: List[int] = []
     pending_texts: List[str] = []
@@ -379,15 +405,27 @@ def _polish_translations(
 # Debug logging
 # ---------------------------------------------------------------------------
 
+def _is_debug() -> bool:
+    """Return True when DRAKONSUB_DEBUG is set to a truthy value."""
+    return os.getenv("DRAKONSUB_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _log_grouping_stats(
     groups: List[List[int]],
     all_texts: List[str],
 ) -> None:
+    """
+    Print aggregate grouping statistics and, when debug mode is active,
+    show a sample of the first two groups with their cue text.
+    """
     total = sum(len(g) for g in groups)
     avg = total / len(groups) if groups else 0.0
     print(f"\n[Phrase Grouping] Original cue count : {total}")
     print(f"[Phrase Grouping] Phrase group count  : {len(groups)}")
     print(f"[Phrase Grouping] Avg cues per group  : {avg:.1f}")
+
+    if not _is_debug():
+        return
 
     sample_count = min(2, len(groups))
     for ex_i, group in enumerate(groups[:sample_count]):
@@ -402,6 +440,13 @@ def _log_translation_examples(
     non_empty_indices: List[int],
     translated_texts: List[str],
 ) -> None:
+    """
+    Print EN→VI sample pairs for the first two groups.
+    Only emitted when DRAKONSUB_DEBUG is enabled.
+    """
+    if not _is_debug():
+        return
+
     sample_count = min(2, len(groups))
     print("\n[Phrase Grouping] Translation examples:")
     for ex_i, group in enumerate(groups[:sample_count]):
@@ -436,7 +481,8 @@ def translate_srt_entries_openai(
     client = OpenAI(api_key=api_key)
     model = model or get_openai_model()
     batch_size = batch_size or get_translation_batch_size()
-    max_cues_per_group = get_phrase_group_max_cues()
+    # Clamp so a single group can never exceed one full batch.
+    max_cues_per_group = min(get_phrase_group_max_cues(), batch_size)
     polish = translation_polish_enabled() if polish is None else polish
 
     # -----------------------------------------------------------------------

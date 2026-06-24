@@ -22,6 +22,10 @@ OPENAI_CHAT_MODELS = (
 DEFAULT_OPENAI_MODEL = "gpt-5.5-2026-04-23"
 DEFAULT_TRANSLATION_BATCH_SIZE = 30
 
+# Maximum consecutive cues per phrase group sent to GPT.
+# Smaller = more groups (more API calls), larger = more context per call.
+DEFAULT_MAX_CUES_PER_GROUP = 6
+
 # Models that fail on chat/completions — map to the closest supported tier.
 OPENAI_MODEL_ALIASES = {
     "gpt-5.5-pro": DEFAULT_OPENAI_MODEL,
@@ -43,6 +47,12 @@ def get_translation_batch_size() -> int:
     load_env()
     value = int(os.getenv("TRANSLATION_BATCH_SIZE", str(DEFAULT_TRANSLATION_BATCH_SIZE)))
     return max(1, min(value, 50))
+
+
+def get_phrase_group_max_cues() -> int:
+    load_env()
+    value = int(os.getenv("PHRASE_GROUP_MAX_CUES", str(DEFAULT_MAX_CUES_PER_GROUP)))
+    return max(1, min(value, 20))
 
 
 def translation_polish_enabled() -> bool:

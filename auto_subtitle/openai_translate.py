@@ -1,30 +1,139 @@
 import json
 import os
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from .config import get_openai_model, get_translation_batch_size, translation_polish_enabled
+from .config import (
+    get_openai_model,
+    get_phrase_group_max_cues,
+    get_translation_batch_size,
+    translation_polish_enabled,
+)
 from .translation_topics import build_polish_system_prompt, build_system_prompt, normalize_topic
 from .openai_chat import create_chat_completion
 
+# Punctuation that signals the end of a sentence / phrase group.
+_SENTENCE_END_CHARS = frozenset(".!?…")
 
-def _build_translate_user_prompt(segments: List[str], target_lang: str) -> str:
-    lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
-    n = len(segments)
-    return (
-        f"You receive {n} English subtitle lines from a video.\n\n"
-        "Your task is NOT word-by-word translation. Create natural, easy-to-understand "
-        f"{target_lang} subtitles that Vietnamese viewers would actually read on screen.\n\n"
-        "Read all lines together for context, then rewrite each line naturally. "
-        "You may change sentence structure so Vietnamese flows smoothly. "
-        "Keep one output string per input line — same count, same order.\n\n"
-        + "\n".join(lines)
-        + f'\n\nRespond with JSON: {{"translations": ["...", ...]}} '
-        f"containing exactly {n} strings in the same order."
+
+# ---------------------------------------------------------------------------
+# Phrase grouping helpers
+# ---------------------------------------------------------------------------
+
+def _group_cues_by_sentence(
+    texts: List[str],
+    max_cues_per_group: int = 6,
+) -> List[List[int]]:
+    """
+    Partition 0-based cue indices into phrase groups.
+
+    A new group is started when the current cue ends with sentence-ending
+    punctuation, or when the group would exceed *max_cues_per_group*.
+
+    Returns a list of groups; each group is an ordered list of indices
+    into *texts*.
+    """
+    groups: List[List[int]] = []
+    current: List[int] = []
+
+    for i, text in enumerate(texts):
+        current.append(i)
+        # Strip trailing closing punctuation (quotes, brackets) so that cues
+        # like  'like stocks."'  or  'like stocks.)'  still close the group.
+        inner = text.strip().rstrip("\"')}]")
+        last_char = inner[-1:] if inner else ""
+        if last_char in _SENTENCE_END_CHARS or len(current) >= max_cues_per_group:
+            groups.append(current)
+            current = []
+
+    if current:
+        groups.append(current)
+
+    return groups
+
+
+def _pack_groups_into_batches(
+    groups: List[List[int]],
+    batch_size: int,
+) -> List[List[List[int]]]:
+    """
+    Pack phrase groups into API-call batches so total cues per batch
+    does not exceed *batch_size*.
+
+    A single group that is larger than *batch_size* is kept as-is in its
+    own batch (over-size edge case).
+    """
+    batches: List[List[List[int]]] = []
+    current_batch: List[List[int]] = []
+    current_count = 0
+
+    for group in groups:
+        if current_count + len(group) > batch_size and current_batch:
+            batches.append(current_batch)
+            current_batch = [group]
+            current_count = len(group)
+        else:
+            current_batch.append(group)
+            current_count += len(group)
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+# ---------------------------------------------------------------------------
+# Prompt builders
+# ---------------------------------------------------------------------------
+
+def _build_grouped_user_prompt(
+    batch_groups: List[List[int]],
+    all_texts: List[str],
+    target_lang: str,
+) -> str:
+    """
+    Build the user prompt for a batch of phrase groups.
+
+    Groups are shown as labelled sections so the model can read each group
+    as a coherent thought before translating its individual cues.
+    Each cue is numbered sequentially across the whole batch so the model
+    emits a flat ``translations`` JSON array of the same length.
+    """
+    total_cues = sum(len(g) for g in batch_groups)
+    n_groups = len(batch_groups)
+
+    header = (
+        f"You receive {total_cues} English subtitle cue{'s' if total_cues != 1 else ''} "
+        f"from a video, organised into {n_groups} phrase group{'s' if n_groups != 1 else ''}.\n\n"
+        "Read each group as a COMPLETE THOUGHT before translating. "
+        f"Use the full group context to write natural, idiomatic {target_lang} subtitles "
+        "— NOT word-by-word translation.\n\n"
+        "Rules:\n"
+        f"- Output exactly 1 {target_lang} line per input cue, same order\n"
+        "- Do NOT merge, skip, or reorder cues\n"
+        f"- {target_lang} text must flow naturally as a subtitle read on screen\n"
+        "- Each line must be self-contained and readable on its own\n"
     )
+
+    group_lines: List[str] = []
+    flat_idx = 1  # sequential [1][2][3] across entire batch
+
+    for g_num, group in enumerate(batch_groups, 1):
+        group_lines.append(f"\n--- Group {g_num} ({len(group)} cue{'s' if len(group) != 1 else ''}) ---")
+        for local_idx in group:
+            group_lines.append(f"[{flat_idx}] {all_texts[local_idx]}")
+            flat_idx += 1
+
+    footer = (
+        f'\n\nRespond with JSON: {{"translations": ["...", ...]}} '
+        f"containing exactly {total_cues} strings in the same order as input."
+    )
+
+    return header + "\n".join(group_lines) + footer
 
 
 def _build_polish_user_prompt(segments: List[str]) -> str:
+    """Build the user prompt asking the model to polish Vietnamese subtitle lines."""
     lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
     n = len(segments)
     return (
@@ -38,7 +147,18 @@ def _build_polish_user_prompt(segments: List[str]) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# JSON response parser
+# ---------------------------------------------------------------------------
+
 def _parse_json_strings(content: str, key: str, expected_count: int) -> List[str]:
+    """
+    Parse a JSON string returned by OpenAI and extract a string array.
+
+    Strips optional markdown code fences, loads the JSON, locates the array
+    under *key*, and validates that exactly *expected_count* strings are
+    present.  Raises ``ValueError`` on any mismatch.
+    """
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*", "", content)
@@ -55,19 +175,35 @@ def _parse_json_strings(content: str, key: str, expected_count: int) -> List[str
     return [str(v).strip() for v in values]
 
 
-def _call_openai_translate(
+# ---------------------------------------------------------------------------
+# OpenAI callers
+# ---------------------------------------------------------------------------
+
+def _call_openai_translate_grouped(
     client,
     model: str,
-    segments: List[str],
+    batch_groups: List[List[int]],
+    all_texts: List[str],
     target_lang: str,
     topic: str,
 ) -> List[str]:
+    """
+    Translate a batch of phrase groups in a single OpenAI API call.
+
+    Builds a grouped prompt that shows each group as a labelled block,
+    calls the model, and returns a flat list of translated strings in the
+    same order as the input cues across all groups.
+    """
+    total_cues = sum(len(g) for g in batch_groups)
     response = create_chat_completion(
         client,
         model,
         messages=[
             {"role": "system", "content": build_system_prompt(topic)},
-            {"role": "user", "content": _build_translate_user_prompt(segments, target_lang)},
+            {
+                "role": "user",
+                "content": _build_grouped_user_prompt(batch_groups, all_texts, target_lang),
+            },
         ],
         temperature=0.4,
         response_format={"type": "json_object"},
@@ -75,7 +211,45 @@ def _call_openai_translate(
     return _parse_json_strings(
         response.choices[0].message.content or "",
         "translations",
-        len(segments),
+        total_cues,
+    )
+
+
+def _call_openai_translate(
+    client,
+    model: str,
+    segments: List[str],
+    target_lang: str,
+    topic: str,
+) -> List[str]:
+    """Legacy single-cue-list translator used as a last-resort fallback."""
+    lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
+    n = len(segments)
+    user_prompt = (
+        f"You receive {n} English subtitle lines from a video.\n\n"
+        "Your task is NOT word-by-word translation. Create natural, easy-to-understand "
+        f"{target_lang} subtitles that Vietnamese viewers would actually read on screen.\n\n"
+        "Read all lines together for context, then rewrite each line naturally. "
+        "You may change sentence structure so Vietnamese flows smoothly. "
+        "Keep one output string per input line — same count, same order.\n\n"
+        + "\n".join(lines)
+        + f'\n\nRespond with JSON: {{"translations": ["...", ...]}} '
+        f"containing exactly {n} strings in the same order."
+    )
+    response = create_chat_completion(
+        client,
+        model,
+        messages=[
+            {"role": "system", "content": build_system_prompt(topic)},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.4,
+        response_format={"type": "json_object"},
+    )
+    return _parse_json_strings(
+        response.choices[0].message.content or "",
+        "translations",
+        n,
     )
 
 
@@ -85,6 +259,7 @@ def _call_openai_polish(
     segments: List[str],
     topic: str,
 ) -> List[str]:
+    """Call OpenAI to polish a flat list of Vietnamese subtitle segments."""
     response = create_chat_completion(
         client,
         model,
@@ -102,6 +277,52 @@ def _call_openai_polish(
     )
 
 
+# ---------------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------------
+
+def _translate_batch_with_retry(
+    client,
+    model: str,
+    batch_groups: List[List[int]],
+    all_texts: List[str],
+    target_lang: str,
+    topic: str,
+) -> List[str]:
+    """
+    Translate a batch of groups with cascading retry:
+      1. Try the full batch in one call.
+      2. On failure, retry each group individually.
+      3. On a single-group failure, fall back to per-cue legacy translation.
+    """
+    try:
+        return _call_openai_translate_grouped(
+            client, model, batch_groups, all_texts, target_lang, topic
+        )
+    except Exception as exc:
+        print(f"  Batch failed ({exc}), retrying group-by-group…")
+
+    results: List[str] = []
+    for group in batch_groups:
+        try:
+            group_results = _call_openai_translate_grouped(
+                client, model, [group], all_texts, target_lang, topic
+            )
+            results.extend(group_results)
+        except Exception as exc2:
+            print(f"  Group failed ({exc2}), falling back to per-cue…")
+            for local_idx in group:
+                try:
+                    per_cue = _call_openai_translate(
+                        client, model, [all_texts[local_idx]], target_lang, topic
+                    )
+                    results.extend(per_cue)
+                except Exception:
+                    results.append(all_texts[local_idx])  # keep English on total failure
+
+    return results
+
+
 def _split_retry_batch(
     client,
     model: str,
@@ -110,6 +331,7 @@ def _split_retry_batch(
     topic: str,
     target_lang: Optional[str] = None,
 ) -> List[str]:
+    """Binary-split retry for the polish pass (operates on flat segment lists)."""
     try:
         if target_lang is not None:
             return call_fn(client, model, segments, target_lang, topic)
@@ -127,6 +349,10 @@ def _split_retry_batch(
         return first + second
 
 
+# ---------------------------------------------------------------------------
+# Polish pass
+# ---------------------------------------------------------------------------
+
 def _polish_translations(
     client,
     model: str,
@@ -134,6 +360,12 @@ def _polish_translations(
     topic: str,
     batch_size: int,
 ) -> List[str]:
+    """
+    Run a polish pass over all translated texts in *batch_size* chunks.
+
+    Empty strings are passed through unchanged.  Returns a list of the
+    same length as *texts* with each line polished in place.
+    """
     polished: List[Optional[str]] = [None] * len(texts)
     pending_indices: List[int] = []
     pending_texts: List[str] = []
@@ -144,7 +376,7 @@ def _polish_translations(
             return
 
         print(
-            f"  Polishing segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}..."
+            f"  Polishing segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}…"
         )
         batch_polished = _split_retry_batch(
             client, model, pending_texts, _call_openai_polish, topic
@@ -169,6 +401,66 @@ def _polish_translations(
     return [t if t is not None else "" for t in polished]
 
 
+# ---------------------------------------------------------------------------
+# Debug logging
+# ---------------------------------------------------------------------------
+
+def _is_debug() -> bool:
+    """Return True when DRAKONSUB_DEBUG is set to a truthy value."""
+    return os.getenv("DRAKONSUB_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_grouping_stats(
+    groups: List[List[int]],
+    all_texts: List[str],
+) -> None:
+    """
+    Print aggregate grouping statistics and, when debug mode is active,
+    show a sample of the first two groups with their cue text.
+    """
+    total = sum(len(g) for g in groups)
+    avg = total / len(groups) if groups else 0.0
+    print(f"\n[Phrase Grouping] Original cue count : {total}")
+    print(f"[Phrase Grouping] Phrase group count  : {len(groups)}")
+    print(f"[Phrase Grouping] Avg cues per group  : {avg:.1f}")
+
+    if not _is_debug():
+        return
+
+    sample_count = min(2, len(groups))
+    for ex_i, group in enumerate(groups[:sample_count]):
+        print(f"[Phrase Grouping] Example group {ex_i + 1} (pre-translation):")
+        for local_idx in group:
+            print(f"    [{local_idx + 1}] {all_texts[local_idx]}")
+
+
+def _log_translation_examples(
+    groups: List[List[int]],
+    all_texts: List[str],
+    non_empty_indices: List[int],
+    translated_texts: List[str],
+) -> None:
+    """
+    Print EN→VI sample pairs for the first two groups.
+    Only emitted when DRAKONSUB_DEBUG is enabled.
+    """
+    if not _is_debug():
+        return
+
+    sample_count = min(2, len(groups))
+    print("\n[Phrase Grouping] Translation examples:")
+    for ex_i, group in enumerate(groups[:sample_count]):
+        print(f"  Group {ex_i + 1}:")
+        for local_idx in group:
+            orig_entry_idx = non_empty_indices[local_idx]
+            print(f"    EN: {all_texts[local_idx]}")
+            print(f"    VI: {translated_texts[orig_entry_idx]}")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def translate_srt_entries_openai(
     entries: List[dict],
     target_lang: str = "vi",
@@ -189,57 +481,72 @@ def translate_srt_entries_openai(
     client = OpenAI(api_key=api_key)
     model = model or get_openai_model()
     batch_size = batch_size or get_translation_batch_size()
+    # Clamp so a single group can never exceed one full batch.
+    max_cues_per_group = min(get_phrase_group_max_cues(), batch_size)
     polish = translation_polish_enabled() if polish is None else polish
 
-    pending_indices: List[int] = []
-    pending_texts: List[str] = []
-    translated_texts: List[Optional[str]] = [None] * len(entries)
+    # -----------------------------------------------------------------------
+    # Separate non-empty entries so grouping ignores blank cues.
+    # -----------------------------------------------------------------------
+    all_entry_texts = [e["text"].strip() for e in entries]
+    non_empty_indices: List[int] = [i for i, t in enumerate(all_entry_texts) if t]
+    non_empty_texts: List[str] = [all_entry_texts[i] for i in non_empty_indices]
 
-    def flush_translate_batch() -> None:
-        nonlocal pending_indices, pending_texts
-        if not pending_texts:
-            return
+    if not non_empty_texts:
+        return list(entries)
 
+    # -----------------------------------------------------------------------
+    # Phrase grouping + batching
+    # -----------------------------------------------------------------------
+    groups = _group_cues_by_sentence(non_empty_texts, max_cues_per_group=max_cues_per_group)
+    _log_grouping_stats(groups, non_empty_texts)
+
+    batches = _pack_groups_into_batches(groups, batch_size)
+
+    # -----------------------------------------------------------------------
+    # Translation loop
+    # -----------------------------------------------------------------------
+    translated_non_empty: Dict[int, str] = {}
+
+    local_offset = 0
+    for batch_groups in batches:
+        batch_local_indices = [idx for g in batch_groups for idx in g]
+        first_cue = batch_local_indices[0] + 1
+        last_cue = batch_local_indices[-1] + 1
         print(
-            f"  Translating segments {pending_indices[0] + 1}-{pending_indices[-1] + 1}..."
+            f"  Translating cues {first_cue}-{last_cue} "
+            f"({len(batch_groups)} group{'s' if len(batch_groups) != 1 else ''}, "
+            f"{len(batch_local_indices)} cues)…"
         )
-        batch_translations = _split_retry_batch(
-            client,
-            model,
-            pending_texts,
-            _call_openai_translate,
-            topic,
-            target_lang,
+
+        results = _translate_batch_with_retry(
+            client, model, batch_groups, non_empty_texts, target_lang, topic
         )
-        for idx, vi_text in zip(pending_indices, batch_translations):
-            translated_texts[idx] = vi_text
-        pending_indices = []
-        pending_texts = []
 
-    for i, entry in enumerate(entries):
-        text = entry["text"].strip()
-        if not text:
-            translated_texts[i] = text
-            continue
+        for local_idx, vi_text in zip(batch_local_indices, results):
+            translated_non_empty[local_idx] = vi_text
 
-        pending_indices.append(i)
-        pending_texts.append(text)
+        local_offset += len(batch_local_indices)
 
-        if len(pending_texts) >= batch_size:
-            flush_translate_batch()
+    # -----------------------------------------------------------------------
+    # Reconstruct full translated_texts list (entry-indexed)
+    # -----------------------------------------------------------------------
+    translated_texts = list(all_entry_texts)
+    for local_idx, orig_entry_idx in enumerate(non_empty_indices):
+        translated_texts[orig_entry_idx] = translated_non_empty.get(local_idx, "")
 
-    if pending_texts:
-        flush_translate_batch()
+    _log_translation_examples(groups, non_empty_texts, non_empty_indices, translated_texts)
 
-    final_texts = [t if t is not None else "" for t in translated_texts]
-
-    if polish and any(t.strip() for t in final_texts):
-        print("  Running subtitle polish pass...")
-        final_texts = _polish_translations(
-            client, model, final_texts, topic, batch_size
+    # -----------------------------------------------------------------------
+    # Optional polish pass
+    # -----------------------------------------------------------------------
+    if polish and any(t.strip() for t in translated_texts):
+        print("  Running subtitle polish pass…")
+        translated_texts = _polish_translations(
+            client, model, translated_texts, topic, batch_size
         )
 
     return [
-        {**entry, "text": final_texts[i]}
+        {**entry, "text": translated_texts[i]}
         for i, entry in enumerate(entries)
     ]

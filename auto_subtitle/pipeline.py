@@ -243,5 +243,15 @@ def generate_vietsub(
         final_srt = os.path.join(work_dir, "vi.srt")
         translate_srt_file(srt_path, final_srt, config, on_progress)
 
+    # Shorten verbose Vietnamese text to improve readability (in-place, opt-out via env).
+    from .subtitle_readability_optimizer import optimize_readability_file
+    _report(on_progress, "Optimising subtitle readability...", 68)
+    optimize_readability_file(final_srt)
+
+    # Adjust cue timing for comfortable Vietnamese reading (in-place, opt-out via env).
+    from .subtitle_timing_optimizer import optimize_srt_timing_file
+    _report(on_progress, "Optimising subtitle timing...", 74)
+    optimize_srt_timing_file(final_srt)
+
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     return burn_subtitles(video_path, final_srt, output_path, config, on_progress)

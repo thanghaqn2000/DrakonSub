@@ -120,14 +120,75 @@ def hex_color_to_ass(color: str) -> str:
     return f"&H00{blue.upper()}{green.upper()}{red.upper()}"
 
 
-def get_video_size(video_path: str) -> tuple[int, int]:
+def _parse_rotation_degrees(value) -> Optional[int]:
+    """Parse rotation metadata to integer degrees, or None if invalid."""
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_video_rotation_degrees(video_stream: dict) -> int:
+    """
+    Read rotation (degrees) from common ffprobe locations.
+
+    Checks stream.rotation, side_data_list[].rotation, and tags.rotate.
+    Returns 0 when no rotation metadata is present.
+    """
+    candidates = []
+
+    if "rotation" in video_stream:
+        candidates.append(video_stream["rotation"])
+
+    for side_data in video_stream.get("side_data_list") or []:
+        if "rotation" in side_data:
+            candidates.append(side_data["rotation"])
+
+    tags = video_stream.get("tags") or {}
+    if "rotate" in tags:
+        candidates.append(tags["rotate"])
+
+    for raw in candidates:
+        parsed = _parse_rotation_degrees(raw)
+        if parsed is not None:
+            return parsed
+
+    return 0
+
+
+def _rotation_requires_dimension_swap(rotation_degrees: int) -> bool:
+    """True when display orientation swaps stored width/height (90° or 270°)."""
+    normalized = abs(int(rotation_degrees)) % 360
+    return normalized in (90, 270)
+
+
+def get_video_display_size(video_path: str) -> tuple[int, int, int, int, int]:
+    """
+    Return video dimensions for layout/rendering (display-oriented).
+
+    Tuple: (display_width, display_height, stored_width, stored_height, rotation)
+    """
     import ffmpeg
 
     probe = ffmpeg.probe(video_path)
     video_stream = next(
         stream for stream in probe["streams"] if stream["codec_type"] == "video"
     )
-    return int(video_stream["width"]), int(video_stream["height"])
+    stored_w = int(video_stream["width"])
+    stored_h = int(video_stream["height"])
+    rotation = _extract_video_rotation_degrees(video_stream)
+
+    if _rotation_requires_dimension_swap(rotation):
+        return stored_h, stored_w, stored_w, stored_h, rotation
+    return stored_w, stored_h, stored_w, stored_h, rotation
+
+
+def get_video_size(video_path: str) -> tuple[int, int]:
+    """Return (width, height) in display orientation (rotation-aware)."""
+    display_w, display_h, _, _, _ = get_video_display_size(video_path)
+    return display_w, display_h
 
 
 def scale_subtitle_metric(value: int, video_size: int, reference_size: int) -> int:

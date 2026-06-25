@@ -859,13 +859,19 @@
     }
 
     function onJobComplete(data) {
+      const completedJobId = currentJobId;
       setOutputPreview(data.preview_url, data.download_url);
       editLayoutBtn.hidden = false;
       editLayoutBtn.disabled = false;
       renderAgainBtn.hidden = false;
       renderAgainBtn.disabled = !data.can_render_again;
       layoutDirty = false;
-      loadJobLayout(currentJobId).then(applyLayoutToControls).catch(() => {});
+      loadJobLayout(completedJobId)
+        .then((layout) => {
+          if (currentJobId !== completedJobId) return;
+          applyLayoutToControls(layout);
+        })
+        .catch(() => {});
     }
 
     async function pollJob(jobId) {
@@ -900,10 +906,22 @@
         layoutEditing = true;
         editLayoutBtn.textContent = "Lưu layout";
         layoutPanel.classList.remove("hidden");
+        const editingJobId = currentJobId;
         try {
-          const layout = await loadJobLayout(currentJobId);
+          const layout = await loadJobLayout(editingJobId);
+          if (currentJobId !== editingJobId) {
+            layoutEditing = false;
+            editLayoutBtn.textContent = "Chỉnh layout";
+            layoutPanel.classList.add("hidden");
+            if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
+            return;
+          }
           applyLayoutToControls(layout);
         } catch (err) {
+          layoutEditing = false;
+          editLayoutBtn.textContent = "Chỉnh layout";
+          layoutPanel.classList.add("hidden");
+          if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
           showError(err.message);
           return;
         }

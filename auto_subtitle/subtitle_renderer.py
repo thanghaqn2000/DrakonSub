@@ -288,7 +288,10 @@ def _load_font(size: int, font_family: str = "arial_bold") -> Tuple[Any, Optiona
             try:
                 font = ImageFont.truetype(path, size)
                 return font, path
-            except Exception:
+            except (OSError, ValueError) as exc:
+                print(
+                    f"WARNING: Failed to load font '{path}' at size {size}: {exc}"
+                )
                 continue
     print(
         "WARNING: No TrueType font found. Subtitle render may look incorrect."
@@ -323,7 +326,8 @@ def _font_line_height(font, fallback: int) -> int:
         metric_h = ascent + descent
         if metric_h > 0:
             return metric_h
-    except Exception:
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        print(f"WARNING: Failed to read font metrics, using fallback height: {exc}")
         pass
     return fallback
 
@@ -617,7 +621,8 @@ def _burn_rounded(
     probe_font, probe_path = _load_font(scaled_font, style.font_family)
     try:
         ascent, descent = probe_font.getmetrics()
-    except Exception:
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        print(f"WARNING: Failed to read probe font metrics: {exc}")
         ascent, descent = 0, 0
 
     print(

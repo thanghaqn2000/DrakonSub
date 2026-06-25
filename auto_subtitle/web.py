@@ -120,6 +120,18 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Layout must be a JSON object")
 
+    def _as_float(value: Any, field: str) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be a number") from exc
+
+    def _as_int(value: Any, field: str) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be an integer") from exc
+
     base = default_layout_dict()
     layout = {**base, **data}
 
@@ -127,18 +139,21 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
     if layout["mode"] not in ("rounded", "classic"):
         raise ValueError("mode must be 'rounded' or 'classic'")
 
-    layout["x_ratio"] = float(layout["x_ratio"])
-    layout["y_ratio"] = float(layout["y_ratio"])
+    layout["x_ratio"] = _as_float(layout["x_ratio"], "x_ratio")
+    layout["y_ratio"] = _as_float(layout["y_ratio"], "y_ratio")
     if not 0.0 <= layout["x_ratio"] <= 1.0:
         raise ValueError("x_ratio must be between 0 and 1")
     if not 0.0 <= layout["y_ratio"] <= 1.0:
         raise ValueError("y_ratio must be between 0 and 1")
 
-    layout["width_ratio"] = float(layout.get("width_ratio", layout.get("max_width_ratio", 0.86)))
+    layout["width_ratio"] = _as_float(
+        layout.get("width_ratio", layout.get("max_width_ratio", 0.86)),
+        "width_ratio",
+    )
     if not 0.4 <= layout["width_ratio"] <= 1.0:
         raise ValueError("width_ratio must be between 0.4 and 1.0")
 
-    layout["font_size"] = int(layout["font_size"])
+    layout["font_size"] = _as_int(layout["font_size"], "font_size")
     if not 12 <= layout["font_size"] <= 200:
         raise ValueError("font_size must be between 12 and 200")
 
@@ -149,13 +164,21 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
         hex_color_to_ass(raw)
         layout[color_key] = raw.upper()
 
-    layout["background_opacity"] = float(layout["background_opacity"])
+    layout["background_opacity"] = _as_float(
+        layout["background_opacity"], "background_opacity"
+    )
     if not 0.0 <= layout["background_opacity"] <= 1.0:
         raise ValueError("background_opacity must be between 0 and 1")
 
-    layout["border_radius"] = int(layout["border_radius"])
-    layout["padding_x"] = int(layout["padding_x"])
-    layout["padding_y"] = int(layout["padding_y"])
+    layout["border_radius"] = _as_int(layout["border_radius"], "border_radius")
+    layout["padding_x"] = _as_int(layout["padding_x"], "padding_x")
+    layout["padding_y"] = _as_int(layout["padding_y"], "padding_y")
+    if not 0 <= layout["border_radius"] <= 200:
+        raise ValueError("border_radius must be between 0 and 200")
+    if not 0 <= layout["padding_x"] <= 200:
+        raise ValueError("padding_x must be between 0 and 200")
+    if not 0 <= layout["padding_y"] <= 200:
+        raise ValueError("padding_y must be between 0 and 200")
 
     font_family = str(layout.get("font_family", "arial_bold")).strip().lower()
     if font_family not in FONT_FAMILY_CHOICES:
@@ -261,16 +284,30 @@ def reburn_job_subtitles(
         output_path = job.output_path or str(
             JOBS_ROOT / job_id / f"{job.output_name}.mp4"
         )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        os.makedirs(output_dir, exist_ok=True)
+        tmp_output_path = os.path.join(
+            output_dir, f".{job.output_name}.tmp-{uuid.uuid4().hex}.mp4"
+        )
         config = build_subtitle_config(job)
 
-    reburn_subtitles(
-        job.input_path,
-        job.srt_path,
-        output_path,
-        layout,
-        config=config,
-        on_progress=on_progress,
-    )
+    try:
+        reburn_subtitles(
+            job.input_path,
+            job.srt_path,
+            tmp_output_path,
+            layout,
+            config=config,
+            on_progress=on_progress,
+        )
+        os.replace(tmp_output_path, output_path)
+    finally:
+        if os.path.isfile(tmp_output_path):
+            try:
+                os.remove(tmp_output_path)
+            except OSError:
+                pass
+
     return output_path
 
 
@@ -282,7 +319,6 @@ def _run_reburn(job_id: str) -> None:
 
     try:
         with jobs_lock:
-            jobs[job_id].status = JobStatus.PROCESSING
             jobs[job_id].message = "Re-rendering..."
             jobs[job_id].progress = 0
 
@@ -443,8 +479,22 @@ def render_job_again(job_id: str):
             raise HTTPException(400, "vi.srt not found — run Generate first")
         if not job.input_path or not os.path.isfile(job.input_path):
             raise HTTPException(400, "Original video not found")
+        job.status = JobStatus.PROCESSING
+        job.message = "Re-rendering..."
+        job.progress = 0
+        job.error = None
 
-    threading.Thread(target=_run_reburn, args=(job_id,), daemon=True).start()
+    try:
+        threading.Thread(target=_run_reburn, args=(job_id,), daemon=True).start()
+    except Exception:
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job:
+                job.status = JobStatus.ERROR
+                job.message = "Re-render failed"
+                job.error = "Failed to start re-render worker"
+        raise
+
     return {"ok": True, "job_id": job_id}
 
 

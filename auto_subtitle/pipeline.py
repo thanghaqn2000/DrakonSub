@@ -232,6 +232,9 @@ def burn_subtitles(
         style.reference_height = config.subtitle_reference_height
         style.text_safe_padding_y = config.subtitle_text_safe_padding_y
         style.line_spacing = config.subtitle_line_spacing
+        # Preserve configured legacy bottom margin unless layout explicitly sets it.
+        if "bottom_margin_ratio" not in layout:
+            style.bottom_margin_ratio = config.subtitle_bottom_margin_ratio
     else:
         style = SubtitleRenderStyle(
             mode=config.subtitle_style_mode,

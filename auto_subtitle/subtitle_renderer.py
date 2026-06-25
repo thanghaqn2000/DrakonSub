@@ -274,13 +274,17 @@ def _render_cue_image(
         return None
 
     scale = video_h / max(style.reference_height, 1)
+    max_width_ratio = min(1.0, max(0.1, style.max_width_ratio))
+    line_spacing = max(1.0, style.line_spacing)
+    background_opacity = min(1.0, max(0.0, style.background_opacity))
+    bottom_margin_ratio = min(0.9, max(0.0, style.bottom_margin_ratio))
     font_size = max(12, round(style.font_size * scale))
     pad_x = max(6, round(style.padding_x * scale))
     pad_y = max(4, round(style.padding_y * scale))
     safe_pad_y = max(0, round(style.text_safe_padding_y * scale))
     radius = max(4, round(style.border_radius * scale))
-    bottom_margin = round(video_h * style.bottom_margin_ratio)
-    max_box_w = round(video_w * style.max_width_ratio)
+    bottom_margin = round(video_h * bottom_margin_ratio)
+    max_box_w = max(1, round(video_w * max_width_ratio))
 
     font = _load_font(font_size)
 
@@ -295,7 +299,7 @@ def _render_cue_image(
     tight_heights = [_measure_text(ln, font)[1] for ln in lines]
     metric_line_h = _font_line_height(font, font_size)
     line_h = max([metric_line_h] + tight_heights) if tight_heights else metric_line_h
-    line_gap = round(line_h * (style.line_spacing - 1.0))
+    line_gap = round(line_h * (line_spacing - 1.0))
 
     text_w = max(line_widths) if line_widths else inner_max_w
     text_total_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
@@ -308,7 +312,7 @@ def _render_cue_image(
     draw = ImageDraw.Draw(img)
 
     # Rounded (or flat) background.
-    bg = _hex_to_rgba(style.background_color, style.background_opacity)
+    bg = _hex_to_rgba(style.background_color, background_opacity)
     if _ROUNDED_RECT_OK:
         draw.rounded_rectangle([(0, 0), (box_w - 1, box_h - 1)], radius=radius, fill=bg)
     else:
@@ -412,13 +416,19 @@ def _burn_classic(
         style.reference_height,
     )
 
-    vid = _ffmpeg.input(video_path)
-    _ffmpeg.concat(
-        vid.filter("subtitles", ass_path),
-        vid.audio,
-        v=1,
-        a=1,
-    ).output(output_path).run(quiet=True, overwrite_output=True)
+    try:
+        vid = _ffmpeg.input(video_path)
+        _ffmpeg.concat(
+            vid.filter("subtitles", ass_path),
+            vid.audio,
+            v=1,
+            a=1,
+        ).output(output_path).run(quiet=True, overwrite_output=True)
+    finally:
+        try:
+            os.remove(ass_path)
+        except OSError:
+            pass
 
     return output_path
 

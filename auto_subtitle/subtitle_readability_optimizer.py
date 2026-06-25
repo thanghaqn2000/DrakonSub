@@ -329,8 +329,15 @@ def _optimize_entries(
                 max(1, int(durations[i] * cfg.target_cps)) for i in hard_indices
             ]
             rewritten = _openai_rewrite_batch(batch_texts, batch_budgets)
-            for idx, new_text in zip(hard_indices, rewritten):
-                texts_final[idx] = new_text
+            for pos, idx in enumerate(hard_indices):
+                candidate = str(rewritten[pos]).strip()
+                current = texts_after_rules[idx]
+                if (
+                    candidate
+                    and _char_count(candidate) <= batch_budgets[pos]
+                    and _cps(candidate, durations[idx]) <= _cps(current, durations[idx])
+                ):
+                    texts_final[idx] = candidate
 
     # -----------------------------------------------------------------------
     # Summary logging

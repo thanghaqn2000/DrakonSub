@@ -61,10 +61,20 @@ class SubtitleConfig:
     subtitle_background_opacity: float = 0.92
     subtitle_max_width_ratio: float = 0.86
     subtitle_line_spacing: float = 1.15
+    subtitle_bottom_margin_ratio: float = 0.11
 
     @classmethod
     def from_env(cls) -> "SubtitleConfig":
         from .translation_topics import DEFAULT_TOPIC, normalize_topic
+
+        raw_bottom_ratio = os.getenv("SUBTITLE_BOTTOM_MARGIN_RATIO", "").strip()
+        if raw_bottom_ratio:
+            try:
+                bottom_margin_ratio = float(raw_bottom_ratio)
+            except ValueError:
+                bottom_margin_ratio = _env_float("SUBTITLE_MARGIN_BOTTOM", 32.0) / 100.0
+        else:
+            bottom_margin_ratio = _env_float("SUBTITLE_MARGIN_BOTTOM", 32.0) / 100.0
 
         return cls(
             subtitle_margin_bottom=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
@@ -89,6 +99,7 @@ class SubtitleConfig:
             subtitle_background_opacity=_env_float("SUBTITLE_BACKGROUND_OPACITY", 0.92),
             subtitle_max_width_ratio=_env_float("SUBTITLE_MAX_WIDTH_RATIO", 0.86),
             subtitle_line_spacing=_env_float("SUBTITLE_LINE_SPACING", 1.15),
+            subtitle_bottom_margin_ratio=bottom_margin_ratio,
         )
 
 
@@ -224,7 +235,7 @@ def burn_subtitles(
         background_opacity=config.subtitle_background_opacity,
         text_color=config.subtitle_font_color,
         font_size=config.subtitle_font_size,
-        bottom_margin_ratio=config.subtitle_margin_bottom / 100.0,
+        bottom_margin_ratio=config.subtitle_bottom_margin_ratio,
         max_width_ratio=config.subtitle_max_width_ratio,
         line_spacing=config.subtitle_line_spacing,
         reference_height=config.subtitle_reference_height,

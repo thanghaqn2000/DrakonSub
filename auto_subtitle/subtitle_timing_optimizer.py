@@ -83,8 +83,13 @@ def load_timing_config() -> TimingConfig:
 
     speed = os.getenv("VI_SUBTITLE_READING_SPEED", "normal").strip().lower()
     target_cps = _READING_SPEED_MAP.get(speed, _DEFAULT_TARGET_CPS)
+    cps_tolerance = _DEFAULT_MAX_CPS - _DEFAULT_TARGET_CPS
 
-    return TimingConfig(enabled=enabled, target_cps=target_cps)
+    return TimingConfig(
+        enabled=enabled,
+        target_cps=target_cps,
+        max_cps=target_cps + cps_tolerance,
+    )
 
 
 # ---------------------------------------------------------------------------

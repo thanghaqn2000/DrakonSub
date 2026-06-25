@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -5,14 +6,18 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .config import get_openai_model, load_env
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .pipeline import SubtitleConfig, generate_vietsub
+from .pipeline import SubtitleConfig, generate_vietsub, reburn_subtitles
+from .subtitle_renderer import (
+    FONT_FAMILY_CHOICES,
+    default_layout_dict,
+)
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
 from .utils import hex_color_to_ass
 
@@ -39,6 +44,9 @@ class Job:
     output_path: Optional[str] = None
     error: Optional[str] = None
     input_path: Optional[str] = None
+    srt_path: Optional[str] = None
+    layout_path: Optional[str] = None
+    layout_saved: bool = False
     translation_topic: str = DEFAULT_TOPIC
     subtitle_font_size: Optional[int] = None
     subtitle_font_color: Optional[str] = None
@@ -89,6 +97,124 @@ def build_subtitle_config(job: Job) -> SubtitleConfig:
     return config
 
 
+def _job_paths(job_id: str) -> tuple[Path, Path, Path]:
+    job_dir = JOBS_ROOT / job_id
+    return job_dir, job_dir / "vi.srt", job_dir / "layout.json"
+
+
+def _read_layout_file(path: str) -> Dict[str, Any]:
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fp:
+            return json.load(fp)
+    return default_layout_dict()
+
+
+def _write_layout_file(path: str, layout: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(layout, fp, ensure_ascii=False, indent=2)
+
+
+def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and normalize layout JSON from the client."""
+    if not isinstance(data, dict):
+        raise ValueError("Layout must be a JSON object")
+
+    def _as_float(value: Any, field: str) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be a number") from exc
+
+    def _as_int(value: Any, field: str) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be an integer") from exc
+
+    base = default_layout_dict()
+    layout = {**base, **data}
+
+    layout["mode"] = str(layout.get("mode", "rounded")).strip().lower()
+    if layout["mode"] not in ("rounded", "classic"):
+        raise ValueError("mode must be 'rounded' or 'classic'")
+
+    layout["x_ratio"] = _as_float(layout["x_ratio"], "x_ratio")
+    layout["y_ratio"] = _as_float(layout["y_ratio"], "y_ratio")
+    if not 0.0 <= layout["x_ratio"] <= 1.0:
+        raise ValueError("x_ratio must be between 0 and 1")
+    if not 0.0 <= layout["y_ratio"] <= 1.0:
+        raise ValueError("y_ratio must be between 0 and 1")
+
+    layout["width_ratio"] = _as_float(
+        layout.get("width_ratio", layout.get("max_width_ratio", 0.86)),
+        "width_ratio",
+    )
+    if not 0.4 <= layout["width_ratio"] <= 1.0:
+        raise ValueError("width_ratio must be between 0.4 and 1.0")
+
+    layout["font_size"] = _as_int(layout["font_size"], "font_size")
+    if not 12 <= layout["font_size"] <= 200:
+        raise ValueError("font_size must be between 12 and 200")
+
+    for color_key in ("text_color", "background_color"):
+        raw = str(layout[color_key]).strip()
+        if not raw.startswith("#"):
+            raw = f"#{raw}"
+        hex_color_to_ass(raw)
+        layout[color_key] = raw.upper()
+
+    layout["background_opacity"] = _as_float(
+        layout["background_opacity"], "background_opacity"
+    )
+    if not 0.0 <= layout["background_opacity"] <= 1.0:
+        raise ValueError("background_opacity must be between 0 and 1")
+
+    layout["border_radius"] = _as_int(layout["border_radius"], "border_radius")
+    layout["padding_x"] = _as_int(layout["padding_x"], "padding_x")
+    layout["padding_y"] = _as_int(layout["padding_y"], "padding_y")
+    if not 0 <= layout["border_radius"] <= 200:
+        raise ValueError("border_radius must be between 0 and 200")
+    if not 0 <= layout["padding_x"] <= 200:
+        raise ValueError("padding_x must be between 0 and 200")
+    if not 0 <= layout["padding_y"] <= 200:
+        raise ValueError("padding_y must be between 0 and 200")
+
+    font_family = str(layout.get("font_family", "arial_bold")).strip().lower()
+    if font_family not in FONT_FAMILY_CHOICES:
+        raise ValueError(f"font_family must be one of: {', '.join(FONT_FAMILY_CHOICES)}")
+    layout["font_family"] = font_family
+
+    return layout
+
+
+def _job_to_dict(job: Job) -> Dict[str, Any]:
+    can_render_again = (
+        job.status in (JobStatus.DONE, JobStatus.ERROR)
+        and job.layout_saved
+        and job.srt_path
+        and os.path.isfile(job.srt_path)
+        and job.input_path
+        and os.path.isfile(job.input_path)
+    )
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "message": job.message,
+        "progress": job.progress,
+        "output_name": job.output_name,
+        "error": job.error,
+        "layout_saved": job.layout_saved,
+        "can_render_again": can_render_again,
+        "preview_url": f"/api/jobs/{job.id}/preview"
+        if job.status == JobStatus.DONE
+        else None,
+        "download_url": f"/api/jobs/{job.id}/download"
+        if job.status == JobStatus.DONE
+        else None,
+    }
+
+
 def _run_job(job_id: str) -> None:
     def on_progress(message: str, percent: int) -> None:
         with jobs_lock:
@@ -101,20 +227,26 @@ def _run_job(job_id: str) -> None:
             job.status = JobStatus.PROCESSING
             job.message = "Starting..."
             job.progress = 0
-            output_path = str(JOBS_ROOT / job_id / f"{job.output_name}.mp4")
+            job_dir, srt_path, layout_path = _job_paths(job_id)
+            output_path = str(job_dir / f"{job.output_name}.mp4")
             video_path = job.input_path
             config = build_subtitle_config(job)
+            job.srt_path = str(srt_path)
+            job.layout_path = str(layout_path)
 
         generate_vietsub(
             video_path,
             output_path,
             config=config,
             on_progress=on_progress,
+            persist_srt_path=str(srt_path),
+            persist_layout_path=str(layout_path),
         )
 
         with jobs_lock:
             jobs[job_id].status = JobStatus.DONE
             jobs[job_id].output_path = output_path
+            jobs[job_id].layout_saved = True
             jobs[job_id].message = "Complete"
             jobs[job_id].progress = 100
     except Exception as exc:
@@ -122,6 +254,86 @@ def _run_job(job_id: str) -> None:
             jobs[job_id].status = JobStatus.ERROR
             jobs[job_id].error = str(exc)
             jobs[job_id].message = "Failed"
+
+
+def reburn_job_subtitles(
+    job_id: str,
+    layout: Optional[Dict[str, Any]] = None,
+    on_progress: Optional[Any] = None,
+) -> str:
+    """
+    Re-burn subtitles for a completed job using persisted input, vi.srt, and layout.
+
+    Does not transcribe or translate.
+    """
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise RuntimeError("Job not found")
+        if not job.input_path or not os.path.isfile(job.input_path):
+            raise RuntimeError("Original video not found")
+        if not job.srt_path or not os.path.isfile(job.srt_path):
+            raise RuntimeError("vi.srt not found — run Generate first")
+        layout_path = job.layout_path or str(_job_paths(job_id)[2])
+        if layout is None:
+            if not os.path.isfile(layout_path):
+                raise RuntimeError("layout.json not found — save layout first")
+            layout = _read_layout_file(layout_path)
+        else:
+            layout = validate_layout(layout)
+        output_path = job.output_path or str(
+            JOBS_ROOT / job_id / f"{job.output_name}.mp4"
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        os.makedirs(output_dir, exist_ok=True)
+        tmp_output_path = os.path.join(
+            output_dir, f".{job.output_name}.tmp-{uuid.uuid4().hex}.mp4"
+        )
+        config = build_subtitle_config(job)
+
+    try:
+        reburn_subtitles(
+            job.input_path,
+            job.srt_path,
+            tmp_output_path,
+            layout,
+            config=config,
+            on_progress=on_progress,
+        )
+        os.replace(tmp_output_path, output_path)
+    finally:
+        if os.path.isfile(tmp_output_path):
+            try:
+                os.remove(tmp_output_path)
+            except OSError:
+                pass
+
+    return output_path
+
+
+def _run_reburn(job_id: str) -> None:
+    def on_progress(message: str, percent: int) -> None:
+        with jobs_lock:
+            jobs[job_id].message = message
+            jobs[job_id].progress = percent
+
+    try:
+        with jobs_lock:
+            jobs[job_id].message = "Re-rendering..."
+            jobs[job_id].progress = 0
+
+        output_path = reburn_job_subtitles(job_id, on_progress=on_progress)
+
+        with jobs_lock:
+            jobs[job_id].status = JobStatus.DONE
+            jobs[job_id].output_path = output_path
+            jobs[job_id].message = "Re-render complete"
+            jobs[job_id].progress = 100
+    except Exception as exc:
+        with jobs_lock:
+            jobs[job_id].status = JobStatus.ERROR
+            jobs[job_id].error = str(exc)
+            jobs[job_id].message = "Re-render failed"
 
 
 @app.get("/api/topics")
@@ -136,6 +348,8 @@ def get_defaults():
         "subtitle_font_size": config.subtitle_font_size,
         "subtitle_font_color": config.subtitle_font_color,
         "openai_model": get_openai_model(),
+        "default_layout": default_layout_dict(),
+        "font_presets": list(FONT_FAMILY_CHOICES),
     }
 
 
@@ -183,10 +397,14 @@ async def create_job(
     input_path = job_dir / f"input{ext}"
     input_path.write_bytes(await video.read())
 
+    _, srt_path, layout_path = _job_paths(job_id)
+
     job = Job(
         id=job_id,
         output_name=final_name,
         input_path=str(input_path),
+        srt_path=str(srt_path),
+        layout_path=str(layout_path),
         translation_topic=safe_topic,
         subtitle_font_size=parsed_font_size,
         subtitle_font_color=parsed_font_color,
@@ -207,20 +425,77 @@ def get_job(job_id: str):
         job = jobs.get(job_id)
         if not job:
             raise HTTPException(404, "Job not found")
-        return {
-            "job_id": job.id,
-            "status": job.status.value,
-            "message": job.message,
-            "progress": job.progress,
-            "output_name": job.output_name,
-            "error": job.error,
-            "preview_url": f"/api/jobs/{job_id}/preview"
-            if job.status == JobStatus.DONE
-            else None,
-            "download_url": f"/api/jobs/{job_id}/download"
-            if job.status == JobStatus.DONE
-            else None,
-        }
+        return _job_to_dict(job)
+
+
+@app.get("/api/jobs/{job_id}/layout")
+def get_job_layout(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        layout_path = job.layout_path
+
+    if layout_path and os.path.isfile(layout_path):
+        return _read_layout_file(layout_path)
+    return default_layout_dict()
+
+
+@app.put("/api/jobs/{job_id}/layout")
+def put_job_layout(job_id: str, body: Dict[str, Any] = Body(...)):
+    try:
+        layout = validate_layout(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.status not in (JobStatus.DONE, JobStatus.ERROR):
+            raise HTTPException(400, "Layout can only be saved after Generate completes")
+        layout_path = job.layout_path or str(_job_paths(job_id)[2])
+
+    _write_layout_file(layout_path, layout)
+
+    with jobs_lock:
+        jobs[job_id].layout_path = layout_path
+        jobs[job_id].layout_saved = True
+
+    return {"ok": True, "layout": layout}
+
+
+@app.post("/api/jobs/{job_id}/render")
+def render_job_again(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.status == JobStatus.PROCESSING:
+            raise HTTPException(409, "Job is already processing")
+        if not job.layout_saved:
+            raise HTTPException(400, "Save layout before re-rendering")
+        if not job.srt_path or not os.path.isfile(job.srt_path):
+            raise HTTPException(400, "vi.srt not found — run Generate first")
+        if not job.input_path or not os.path.isfile(job.input_path):
+            raise HTTPException(400, "Original video not found")
+        job.status = JobStatus.PROCESSING
+        job.message = "Re-rendering..."
+        job.progress = 0
+        job.error = None
+
+    try:
+        threading.Thread(target=_run_reburn, args=(job_id,), daemon=True).start()
+    except Exception:
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job:
+                job.status = JobStatus.ERROR
+                job.message = "Re-render failed"
+                job.error = "Failed to start re-render worker"
+        raise
+
+    return {"ok": True, "job_id": job_id}
 
 
 @app.get("/api/jobs/{job_id}/preview")

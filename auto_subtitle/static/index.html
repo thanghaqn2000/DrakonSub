@@ -32,6 +32,23 @@
       gap: 0.75rem;
     }
 
+    .header-logo {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      object-fit: cover;
+      display: block;
+      border: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .header-title {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
     header h1 {
       font-size: 1.35rem;
       font-weight: 700;
@@ -200,6 +217,14 @@
     .actions {
       margin-top: 1.25rem;
       display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      align-items: flex-start;
+    }
+
+    .actions-primary,
+    .actions-secondary {
+      display: flex;
       gap: 0.75rem;
       flex-wrap: wrap;
       align-items: center;
@@ -301,12 +326,68 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      position: relative;
     }
 
-    .preview-body video {
+    .preview-wrap {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .preview-wrap video {
       width: 100%;
       height: 100%;
       object-fit: contain;
+      display: block;
+    }
+
+    .subtitle-overlay {
+      position: absolute;
+      left: 50%;
+      top: 78%;
+      transform: translate(-50%, -50%);
+      width: 86%;
+      padding: 0.5em 0.9em;
+      border-radius: 12px;
+      text-align: center;
+      pointer-events: none;
+      line-height: 1.25;
+      word-wrap: break-word;
+      font-weight: 700;
+      box-sizing: border-box;
+      z-index: 2;
+    }
+
+    .layout-panel {
+      margin-top: 1.25rem;
+      padding: 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .layout-panel h3 {
+      font-size: 0.95rem;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    .slider-row {
+      margin-bottom: 0.85rem;
+    }
+
+    .slider-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+
+    .slider-row input[type="range"] {
+      width: 100%;
+      accent-color: var(--purple);
     }
 
     .placeholder {
@@ -319,8 +400,11 @@
 </head>
 <body>
   <header>
-    <h1>DrakonSub</h1>
-    <span>Auto Vietnamese subtitles</span>
+    <img class="header-logo" src="/logo.png" alt="DrakonSub logo" />
+    <div class="header-title">
+      <h1>DrakonSub</h1>
+      <span>Tạo phụ đề tiếng Việt tự động</span>
+    </div>
   </header>
 
   <main>
@@ -359,32 +443,22 @@
         <input type="text" id="output-name" placeholder="vid-speech-vietsub" />
       </div>
 
-      <div class="field-row">
-        <div class="field">
-          <label for="font-size">Cỡ chữ (px)</label>
-          <input type="number" id="font-size" min="12" max="200" placeholder="55" />
-          <p class="field-hint">Để trống = mặc định</p>
-        </div>
-        <div class="field">
-          <label for="font-color">Màu chữ</label>
-          <div class="color-row">
-            <input type="color" id="font-color-picker" value="#9333EA" title="Chọn màu" />
-            <input type="text" id="font-color" placeholder="#9333EA" />
-          </div>
-          <p class="field-hint">Để trống = mặc định</p>
-        </div>
-      </div>
-
       <div class="actions">
-        <button class="btn-primary" id="generate-btn" disabled>Generate</button>
-        <button class="btn-secondary" id="download-btn" disabled hidden>Download</button>
+        <div class="actions-primary">
+          <button class="btn-primary" id="generate-btn" disabled>Tạo phụ đề</button>
+        </div>
+        <div class="actions-secondary">
+          <button class="btn-secondary" id="edit-layout-btn" disabled hidden>Chỉnh layout</button>
+          <button class="btn-secondary" id="render-again-btn" disabled hidden>Render lại</button>
+          <button class="btn-secondary" id="download-btn" disabled hidden>Tải xuống</button>
+        </div>
       </div>
 
       <div class="progress-wrap" id="progress-wrap">
         <div class="progress-bar">
           <div class="progress-fill" id="progress-fill"></div>
         </div>
-        <p class="progress-text" id="progress-text">Waiting...</p>
+        <p class="progress-text" id="progress-text">Đang chờ...</p>
       </div>
 
       <p class="error" id="error-box"></p>
@@ -392,32 +466,98 @@
 
     <section class="previews">
       <div class="preview-card">
-        <h2>Preview — Video gốc</h2>
+        <h2>Xem trước — Video gốc</h2>
         <div class="preview-body" id="input-preview">
           <p class="placeholder">Chưa có video</p>
         </div>
       </div>
 
       <div class="preview-card">
-        <h2>Preview — Video vietsub</h2>
+        <h2>Xem trước — Video vietsub</h2>
         <div class="preview-body" id="output-preview">
-          <p class="placeholder">Generate xong sẽ hiện ở đây</p>
+          <p class="placeholder">Video sau khi tạo sẽ hiện ở đây</p>
         </div>
       </div>
     </section>
+
+    <div class="layout-panel hidden" id="layout-panel">
+      <h3>Chỉnh layout subtitle (áp dụng toàn video)</h3>
+      <div class="slider-row">
+        <label><span>Thay đổi chiều ngang</span><span id="layout-x-val">50%</span></label>
+        <input type="range" id="layout-x" min="0" max="100" value="50" />
+      </div>
+      <div class="slider-row">
+        <label><span>Thay đổi chiều dọc</span><span id="layout-y-val">78%</span></label>
+        <input type="range" id="layout-y" min="0" max="100" value="78" />
+      </div>
+      <div class="slider-row">
+        <label><span>Thay đổi chiều rộng Subtitle</span><span id="layout-width-val">86%</span></label>
+        <input type="range" id="layout-width" min="40" max="100" value="86" />
+      </div>
+      <div class="field-row">
+        <div class="field" style="margin-top:0">
+          <label for="layout-font-size">Cỡ chữ (px @ 1920p)</label>
+          <input type="number" id="layout-font-size" min="12" max="200" value="80" />
+        </div>
+        <div class="field" style="margin-top:0">
+          <label for="layout-font-family">Bộ font</label>
+          <select id="layout-font-family">
+            <option value="arial_bold">Arial đậm</option>
+            <option value="arial">Arial thường</option>
+            <option value="dejavu_bold">DejaVu đậm</option>
+            <option value="dejavu">DejaVu thường</option>
+            <option value="system_default">Mặc định hệ thống</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field" style="margin-top:0">
+          <label>Màu chữ</label>
+          <div class="color-row">
+            <input type="color" id="layout-text-color-picker" value="#B05CFF" />
+            <input type="text" id="layout-text-color" value="#B05CFF" />
+          </div>
+        </div>
+        <div class="field" style="margin-top:0">
+          <label>Màu nền</label>
+          <div class="color-row">
+            <input type="color" id="layout-bg-color-picker" value="#FFFFFF" />
+            <input type="text" id="layout-bg-color" value="#FFFFFF" />
+          </div>
+        </div>
+      </div>
+      <p class="field-hint">Xem trước overlay trên video gốc — chỉ là text mẫu, không sửa nội dung sub thật.</p>
+    </div>
   </main>
 
   <script>
+    const SAMPLE_SUBTITLE = "Đây là phụ đề mẫu của video";
+    const FONT_STACKS = {
+      arial_bold: 'Arial, Helvetica, sans-serif',
+      arial: 'Arial, Helvetica, sans-serif',
+      dejavu_bold: 'Arial, Helvetica, sans-serif',
+      dejavu: 'Arial, Helvetica, sans-serif',
+      system_default: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    };
+
+    const FONT_WEIGHTS = {
+      arial_bold: '700',
+      arial: '400',
+      dejavu_bold: '700',
+      dejavu: '400',
+      system_default: '400',
+    };
+
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
     const topicSelect = document.getElementById("topic");
     const topicField = document.getElementById("topic-field");
     const outputName = document.getElementById("output-name");
-    const fontSize = document.getElementById("font-size");
-    const fontColor = document.getElementById("font-color");
-    const fontColorPicker = document.getElementById("font-color-picker");
     const generateBtn = document.getElementById("generate-btn");
+    const editLayoutBtn = document.getElementById("edit-layout-btn");
+    const renderAgainBtn = document.getElementById("render-again-btn");
     const downloadBtn = document.getElementById("download-btn");
+    const layoutPanel = document.getElementById("layout-panel");
     const progressWrap = document.getElementById("progress-wrap");
     const progressFill = document.getElementById("progress-fill");
     const progressText = document.getElementById("progress-text");
@@ -425,14 +565,32 @@
     const inputPreview = document.getElementById("input-preview");
     const outputPreview = document.getElementById("output-preview");
 
+    const layoutControls = {
+      x: document.getElementById("layout-x"),
+      y: document.getElementById("layout-y"),
+      width: document.getElementById("layout-width"),
+      fontSize: document.getElementById("layout-font-size"),
+      fontFamily: document.getElementById("layout-font-family"),
+      textColor: document.getElementById("layout-text-color"),
+      textColorPicker: document.getElementById("layout-text-color-picker"),
+      bgColor: document.getElementById("layout-bg-color"),
+      bgColorPicker: document.getElementById("layout-bg-color-picker"),
+      xVal: document.getElementById("layout-x-val"),
+      yVal: document.getElementById("layout-y-val"),
+      widthVal: document.getElementById("layout-width-val"),
+    };
+
     let selectedFile = null;
     let inputObjectUrl = null;
     let pollTimer = null;
-    let defaultFontSize = 55;
-    let defaultFontColor = "#9333EA";
+    let defaultLayout = null;
     let sourceLang = "en";
+    let currentJobId = null;
+    let layoutEditing = false;
+    let layoutDirty = false;
+    let currentLayout = null;
+    let layoutOverlayEl = null;
 
-    // Radio button logic
     document.querySelectorAll('input[name="source_language"]').forEach((radio) => {
       radio.addEventListener("change", () => {
         sourceLang = radio.value;
@@ -442,27 +600,37 @@
       });
     });
 
-    fontColorPicker.addEventListener("input", () => {
-      fontColor.value = fontColorPicker.value.toUpperCase();
+    layoutControls.textColorPicker.addEventListener("input", () => {
+      layoutControls.textColor.value = layoutControls.textColorPicker.value.toUpperCase();
+      onLayoutControlChange();
+    });
+    layoutControls.textColor.addEventListener("input", () => {
+      const v = layoutControls.textColor.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(v)) layoutControls.textColorPicker.value = v;
+      onLayoutControlChange();
+    });
+    layoutControls.bgColorPicker.addEventListener("input", () => {
+      layoutControls.bgColor.value = layoutControls.bgColorPicker.value.toUpperCase();
+      onLayoutControlChange();
+    });
+    layoutControls.bgColor.addEventListener("input", () => {
+      const v = layoutControls.bgColor.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(v)) layoutControls.bgColorPicker.value = v;
+      onLayoutControlChange();
     });
 
-    fontColor.addEventListener("input", () => {
-      const v = fontColor.value.trim();
-      if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
-        fontColorPicker.value = v;
-      }
+    ["x", "y", "width"].forEach((key) => {
+      layoutControls[key].addEventListener("input", onLayoutControlChange);
     });
+    layoutControls.fontSize.addEventListener("input", onLayoutControlChange);
+    layoutControls.fontFamily.addEventListener("change", onLayoutControlChange);
 
     async function loadDefaults() {
       try {
         const res = await fetch("/api/defaults");
         if (!res.ok) return;
         const data = await res.json();
-        defaultFontSize = data.subtitle_font_size;
-        defaultFontColor = data.subtitle_font_color;
-        fontSize.placeholder = String(defaultFontSize);
-        fontColor.placeholder = defaultFontColor;
-        fontColorPicker.value = defaultFontColor;
+        defaultLayout = data.default_layout;
       } catch (_) {}
     }
 
@@ -499,24 +667,314 @@
       errorBox.textContent = "";
     }
 
+    function hexToRgba(hex, opacity) {
+      const h = hex.replace("#", "");
+      const r = parseInt(h.slice(0, 2), 16);
+      const g = parseInt(h.slice(2, 4), 16);
+      const b = parseInt(h.slice(4, 6), 16);
+      return `rgba(${r},${g},${b},${opacity})`;
+    }
+
+    function getContainedVideoRect(video, container) {
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      if (!cw || !ch) {
+        return { left: 0, top: 0, width: cw || 1, height: ch || 1 };
+      }
+      const vw = video.videoWidth || cw;
+      const vh = video.videoHeight || ch;
+      if (!vw || !vh) {
+        return { left: 0, top: 0, width: cw, height: ch };
+      }
+      const scale = Math.min(cw / vw, ch / vh);
+      const dw = vw * scale;
+      const dh = vh * scale;
+      return {
+        left: (cw - dw) / 2,
+        top: (ch - dh) / 2,
+        width: dw,
+        height: dh,
+      };
+    }
+
+    function logPreviewMetrics(container, video, label) {
+      const objectFit = window.getComputedStyle(video).objectFit;
+      console.log(
+        `[Preview:${label}] container=${container.clientWidth}x${container.clientHeight} ` +
+        `video=${video.videoWidth}x${video.videoHeight} objectFit=${objectFit}`
+      );
+    }
+
+    function buildVideoPreviewHtml(videoSrc, withOverlay = false) {
+      return `
+        <div class="preview-wrap">
+          <video src="${videoSrc}" controls playsinline></video>
+          ${withOverlay ? `<div class="subtitle-overlay hidden" id="layout-overlay">${SAMPLE_SUBTITLE}</div>` : ""}
+        </div>`;
+    }
+
+    function renderVideoPreview(container, videoSrc, options = {}) {
+      const { withOverlay = false, label = "preview", onVideoRefresh = null } = options;
+      container.innerHTML = buildVideoPreviewHtml(videoSrc, withOverlay);
+      const wrap = container.querySelector(".preview-wrap");
+      const video = wrap?.querySelector("video");
+      if (!video) return;
+
+      const refresh = () => {
+        logPreviewMetrics(container, video, label);
+        if (onVideoRefresh) onVideoRefresh();
+      };
+      video.addEventListener("loadedmetadata", refresh);
+      video.addEventListener("loadeddata", refresh);
+      video.addEventListener("resize", refresh);
+      requestAnimationFrame(refresh);
+    }
+
     function setInputPreview(file) {
       if (inputObjectUrl) URL.revokeObjectURL(inputObjectUrl);
       inputObjectUrl = URL.createObjectURL(file);
-      inputPreview.innerHTML = `<video src="${inputObjectUrl}" controls playsinline></video>`;
+      renderVideoPreview(inputPreview, inputObjectUrl, {
+        withOverlay: true,
+        label: "input",
+        onVideoRefresh: () => {
+          if (layoutEditing && currentLayout) updateLayoutOverlay();
+        },
+      });
+      layoutOverlayEl = document.getElementById("layout-overlay");
+      if (layoutEditing && currentLayout) updateLayoutOverlay();
+    }
+
+    function resetLayoutUi() {
+      currentJobId = null;
+      layoutEditing = false;
+      layoutDirty = false;
+      currentLayout = null;
+      editLayoutBtn.hidden = true;
+      editLayoutBtn.disabled = true;
+      editLayoutBtn.textContent = "Chỉnh layout";
+      renderAgainBtn.hidden = true;
+      renderAgainBtn.disabled = true;
+      layoutPanel.classList.add("hidden");
+      if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
     }
 
     function clearOutputPreview() {
-      outputPreview.innerHTML = `<p class="placeholder">Generate xong sẽ hiện ở đây</p>`;
+      outputPreview.innerHTML = `<p class="placeholder">Video sau khi tạo sẽ hiện ở đây</p>`;
       downloadBtn.hidden = true;
       downloadBtn.disabled = true;
+      resetLayoutUi();
     }
 
     function setOutputPreview(previewUrl, downloadUrl) {
-      outputPreview.innerHTML = `<video src="${previewUrl}" controls playsinline></video>`;
+      const bust = `${previewUrl}?t=${Date.now()}`;
+      renderVideoPreview(outputPreview, bust, { label: "output" });
       downloadBtn.hidden = false;
       downloadBtn.disabled = false;
       downloadBtn.onclick = () => { window.location.href = downloadUrl; };
     }
+
+    function layoutFromControls() {
+      return {
+        mode: "rounded",
+        x_ratio: Number(layoutControls.x.value) / 100,
+        y_ratio: Number(layoutControls.y.value) / 100,
+        width_ratio: Number(layoutControls.width.value) / 100,
+        font_size: Number(layoutControls.fontSize.value),
+        text_color: layoutControls.textColor.value.trim().toUpperCase(),
+        background_color: layoutControls.bgColor.value.trim().toUpperCase(),
+        background_opacity: currentLayout?.background_opacity ?? 0.92,
+        border_radius: currentLayout?.border_radius ?? 18,
+        padding_x: currentLayout?.padding_x ?? 28,
+        padding_y: currentLayout?.padding_y ?? 16,
+        font_family: layoutControls.fontFamily.value,
+      };
+    }
+
+    function applyLayoutToControls(layout) {
+      currentLayout = { ...layout };
+      layoutControls.x.value = Math.round((layout.x_ratio ?? 0.5) * 100);
+      layoutControls.y.value = Math.round((layout.y_ratio ?? 0.78) * 100);
+      layoutControls.width.value = Math.round((layout.width_ratio ?? 0.86) * 100);
+      layoutControls.fontSize.value = layout.font_size ?? 80;
+      layoutControls.fontFamily.value = layout.font_family ?? "arial_bold";
+      layoutControls.textColor.value = (layout.text_color ?? "#B05CFF").toUpperCase();
+      layoutControls.textColorPicker.value = layoutControls.textColor.value;
+      layoutControls.bgColor.value = (layout.background_color ?? "#FFFFFF").toUpperCase();
+      layoutControls.bgColorPicker.value = layoutControls.bgColor.value;
+      layoutControls.xVal.textContent = `${layoutControls.x.value}%`;
+      layoutControls.yVal.textContent = `${layoutControls.y.value}%`;
+      layoutControls.widthVal.textContent = `${layoutControls.width.value}%`;
+      updateLayoutOverlay();
+    }
+
+    function updateLayoutOverlay() {
+      if (!layoutOverlayEl || !currentLayout) return;
+      const wrap = inputPreview.querySelector(".preview-wrap");
+      const video = wrap?.querySelector("video");
+      if (!wrap || !video) return;
+
+      const layout = layoutFromControls();
+      const rect = getContainedVideoRect(video, wrap);
+      const scale = rect.height / 1920;
+      const fontPx = Math.max(10, Math.round(layout.font_size * scale));
+      const padY = Math.max(4, Math.round((layout.padding_y ?? 16) * scale));
+      const padX = Math.max(6, Math.round((layout.padding_x ?? 28) * scale));
+      const radius = Math.max(4, Math.round((layout.border_radius ?? 18) * scale));
+      const boxW = rect.width * layout.width_ratio;
+      const cx = rect.left + rect.width * layout.x_ratio;
+      const cy = rect.top + rect.height * layout.y_ratio;
+      const preset = layout.font_family || "arial_bold";
+
+      layoutOverlayEl.style.left = `${cx}px`;
+      layoutOverlayEl.style.top = `${cy}px`;
+      layoutOverlayEl.style.width = `${boxW}px`;
+      layoutOverlayEl.style.transform = "translate(-50%, -50%)";
+      layoutOverlayEl.style.color = layout.text_color;
+      layoutOverlayEl.style.backgroundColor = hexToRgba(
+        layout.background_color,
+        layout.background_opacity ?? 0.92
+      );
+      layoutOverlayEl.style.fontSize = `${fontPx}px`;
+      layoutOverlayEl.style.padding = `${padY}px ${padX}px`;
+      layoutOverlayEl.style.borderRadius = `${radius}px`;
+      layoutOverlayEl.style.fontFamily = FONT_STACKS[preset] || FONT_STACKS.arial_bold;
+      layoutOverlayEl.style.fontWeight = FONT_WEIGHTS[preset] || "700";
+
+      layoutControls.xVal.textContent = `${layoutControls.x.value}%`;
+      layoutControls.yVal.textContent = `${layoutControls.y.value}%`;
+      layoutControls.widthVal.textContent = `${layoutControls.width.value}%`;
+    }
+
+    function onLayoutControlChange() {
+      if (!layoutEditing) return;
+      layoutDirty = true;
+      renderAgainBtn.disabled = true;
+      updateLayoutOverlay();
+    }
+
+    async function loadJobLayout(jobId) {
+      const res = await fetch(`/api/jobs/${jobId}/layout`);
+      if (!res.ok) throw new Error("Không tải được layout");
+      return res.json();
+    }
+
+    function onJobComplete(data) {
+      const completedJobId = currentJobId;
+      setOutputPreview(data.preview_url, data.download_url);
+      editLayoutBtn.hidden = false;
+      editLayoutBtn.disabled = false;
+      renderAgainBtn.hidden = false;
+      renderAgainBtn.disabled = !data.can_render_again;
+      layoutDirty = false;
+      loadJobLayout(completedJobId)
+        .then((layout) => {
+          if (currentJobId !== completedJobId) return;
+          applyLayoutToControls(layout);
+        })
+        .catch(() => {});
+    }
+
+    async function pollJob(jobId) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) throw new Error("Không lấy được trạng thái job");
+      const data = await res.json();
+
+      progressFill.style.width = `${data.progress}%`;
+      progressText.textContent = `${data.message} (${data.progress}%)`;
+
+      if (data.status === "done") {
+        clearInterval(pollTimer);
+        generateBtn.disabled = false;
+        editLayoutBtn.disabled = layoutEditing;
+        renderAgainBtn.disabled = layoutDirty || !data.can_render_again;
+        onJobComplete(data);
+        return;
+      }
+
+      if (data.status === "error") {
+        clearInterval(pollTimer);
+        generateBtn.disabled = false;
+        editLayoutBtn.disabled = !currentJobId;
+        renderAgainBtn.disabled = layoutDirty || !data.can_render_again;
+        showError(data.error || "Xử lý thất bại");
+      }
+    }
+
+    editLayoutBtn.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      if (!layoutEditing) {
+        layoutEditing = true;
+        editLayoutBtn.textContent = "Lưu layout";
+        layoutPanel.classList.remove("hidden");
+        const editingJobId = currentJobId;
+        try {
+          const layout = await loadJobLayout(editingJobId);
+          if (currentJobId !== editingJobId) {
+            layoutEditing = false;
+            editLayoutBtn.textContent = "Chỉnh layout";
+            layoutPanel.classList.add("hidden");
+            if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
+            return;
+          }
+          applyLayoutToControls(layout);
+        } catch (err) {
+          layoutEditing = false;
+          editLayoutBtn.textContent = "Chỉnh layout";
+          layoutPanel.classList.add("hidden");
+          if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
+          showError(err.message);
+          return;
+        }
+        if (layoutOverlayEl) layoutOverlayEl.classList.remove("hidden");
+        renderAgainBtn.disabled = true;
+        return;
+      }
+
+      try {
+        const layout = layoutFromControls();
+        const res = await fetch(`/api/jobs/${currentJobId}/layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(layout),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Lưu layout thất bại");
+        currentLayout = data.layout;
+        layoutDirty = false;
+        layoutEditing = false;
+        editLayoutBtn.textContent = "Chỉnh layout";
+        layoutPanel.classList.add("hidden");
+        if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
+        renderAgainBtn.disabled = false;
+        clearError();
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    renderAgainBtn.addEventListener("click", async () => {
+      if (!currentJobId || layoutDirty) return;
+      clearError();
+      renderAgainBtn.disabled = true;
+      generateBtn.disabled = true;
+      editLayoutBtn.disabled = true;
+      progressWrap.classList.add("visible");
+      progressFill.style.width = "0%";
+      progressText.textContent = "Đang render lại...";
+
+      try {
+        const res = await fetch(`/api/jobs/${currentJobId}/render`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Render thất bại");
+        pollTimer = setInterval(() => pollJob(currentJobId), 1500);
+        pollJob(currentJobId);
+      } catch (err) {
+        renderAgainBtn.disabled = false;
+        generateBtn.disabled = false;
+        editLayoutBtn.disabled = false;
+        showError(err.message);
+      }
+    });
 
     function handleFile(file) {
       if (!file) return;
@@ -542,27 +1000,9 @@
       handleFile(e.dataTransfer.files[0]);
     });
 
-    async function pollJob(jobId) {
-      const res = await fetch(`/api/jobs/${jobId}`);
-      if (!res.ok) throw new Error("Failed to get job status");
-      const data = await res.json();
-
-      progressFill.style.width = `${data.progress}%`;
-      progressText.textContent = `${data.message} (${data.progress}%)`;
-
-      if (data.status === "done") {
-        clearInterval(pollTimer);
-        generateBtn.disabled = false;
-        setOutputPreview(data.preview_url, data.download_url);
-        return;
-      }
-
-      if (data.status === "error") {
-        clearInterval(pollTimer);
-        generateBtn.disabled = false;
-        showError(data.error || "Processing failed");
-      }
-    }
+    window.addEventListener("resize", () => {
+      if (layoutEditing) updateLayoutOverlay();
+    });
 
     generateBtn.addEventListener("click", async () => {
       if (!selectedFile) return;
@@ -571,10 +1011,13 @@
 
       clearError();
       clearOutputPreview();
+      layoutEditing = false;
+      editLayoutBtn.textContent = "Chỉnh layout";
+      layoutPanel.classList.add("hidden");
       generateBtn.disabled = true;
       progressWrap.classList.add("visible");
       progressFill.style.width = "0%";
-      progressText.textContent = "Uploading...";
+      progressText.textContent = "Đang tải lên...";
 
       const form = new FormData();
       form.append("video", selectedFile);
@@ -582,17 +1025,12 @@
       form.append("topic", topicSelect.value);
       form.append("source_language", sourceLang);
 
-      const sizeVal = fontSize.value.trim();
-      if (sizeVal) form.append("font_size", sizeVal);
-
-      const colorVal = fontColor.value.trim();
-      if (colorVal) form.append("font_color", colorVal);
-
       try {
         const res = await fetch("/api/jobs", { method: "POST", body: form });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Upload failed");
+        if (!res.ok) throw new Error(data.detail || "Tải lên thất bại");
 
+        currentJobId = data.job_id;
         pollTimer = setInterval(() => pollJob(data.job_id), 1500);
         pollJob(data.job_id);
       } catch (err) {

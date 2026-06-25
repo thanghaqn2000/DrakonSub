@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import warnings
 from dataclasses import dataclass
@@ -220,30 +221,61 @@ def burn_subtitles(
     output_path: str,
     config: SubtitleConfig,
     on_progress: Optional[ProgressCallback] = None,
+    layout: Optional[dict] = None,
 ) -> str:
     from .subtitle_renderer import SubtitleRenderStyle, burn_subtitles as _render
 
     _report(on_progress, "Rendering video with subtitles...", 80)
 
-    style = SubtitleRenderStyle(
-        mode=config.subtitle_style_mode,
-        border_radius=config.subtitle_border_radius,
-        padding_x=config.subtitle_padding_x,
-        padding_y=config.subtitle_padding_y,
-        text_safe_padding_y=config.subtitle_text_safe_padding_y,
-        background_color=config.subtitle_background_color,
-        background_opacity=config.subtitle_background_opacity,
-        text_color=config.subtitle_font_color,
-        font_size=config.subtitle_font_size,
-        bottom_margin_ratio=config.subtitle_bottom_margin_ratio,
-        max_width_ratio=config.subtitle_max_width_ratio,
-        line_spacing=config.subtitle_line_spacing,
-        reference_height=config.subtitle_reference_height,
-    )
+    if layout:
+        style = SubtitleRenderStyle.from_dict(layout)
+        style.reference_height = config.subtitle_reference_height
+        style.text_safe_padding_y = config.subtitle_text_safe_padding_y
+        style.line_spacing = config.subtitle_line_spacing
+        # Preserve configured legacy bottom margin unless layout explicitly sets it.
+        if "bottom_margin_ratio" not in layout:
+            style.bottom_margin_ratio = config.subtitle_bottom_margin_ratio
+    else:
+        style = SubtitleRenderStyle(
+            mode=config.subtitle_style_mode,
+            border_radius=config.subtitle_border_radius,
+            padding_x=config.subtitle_padding_x,
+            padding_y=config.subtitle_padding_y,
+            text_safe_padding_y=config.subtitle_text_safe_padding_y,
+            background_color=config.subtitle_background_color,
+            background_opacity=config.subtitle_background_opacity,
+            text_color=config.subtitle_font_color,
+            font_size=config.subtitle_font_size,
+            bottom_margin_ratio=config.subtitle_bottom_margin_ratio,
+            max_width_ratio=config.subtitle_max_width_ratio,
+            line_spacing=config.subtitle_line_spacing,
+            reference_height=config.subtitle_reference_height,
+        )
 
     _render(video_path, srt_path, output_path, style)
     _report(on_progress, "Done", 100)
     return output_path
+
+
+def reburn_subtitles(
+    video_path: str,
+    srt_path: str,
+    output_path: str,
+    layout: dict,
+    config: Optional[SubtitleConfig] = None,
+    on_progress: Optional[ProgressCallback] = None,
+) -> str:
+    """Re-burn subtitles only (no transcribe/translate)."""
+    config = config or SubtitleConfig.from_env()
+    _report(on_progress, "Re-rendering subtitles...", 10)
+    return burn_subtitles(
+        video_path,
+        srt_path,
+        output_path,
+        config,
+        on_progress,
+        layout=layout,
+    )
 
 
 def generate_vietsub(
@@ -251,8 +283,12 @@ def generate_vietsub(
     output_path: str,
     config: Optional[SubtitleConfig] = None,
     on_progress: Optional[ProgressCallback] = None,
+    persist_srt_path: Optional[str] = None,
+    persist_layout_path: Optional[str] = None,
 ) -> str:
     """Full pipeline: transcribe → (translate if EN) → burn subtitles."""
+    from .subtitle_renderer import layout_dict_from_config
+
     config = config or SubtitleConfig.from_env()
     work_dir = tempfile.mkdtemp(prefix="drakonsub_")
 
@@ -280,5 +316,19 @@ def generate_vietsub(
     _report(on_progress, "Optimising subtitle timing...", 74)
     optimize_srt_timing_file(final_srt)
 
+    layout = layout_dict_from_config(config)
+
+    if persist_srt_path:
+        os.makedirs(os.path.dirname(os.path.abspath(persist_srt_path)), exist_ok=True)
+        shutil.copy2(final_srt, persist_srt_path)
+
+    if persist_layout_path:
+        import json
+        os.makedirs(os.path.dirname(os.path.abspath(persist_layout_path)), exist_ok=True)
+        with open(persist_layout_path, "w", encoding="utf-8") as fp:
+            json.dump(layout, fp, ensure_ascii=False, indent=2)
+
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    return burn_subtitles(video_path, final_srt, output_path, config, on_progress)
+    return burn_subtitles(
+        video_path, final_srt, output_path, config, on_progress, layout=layout
+    )

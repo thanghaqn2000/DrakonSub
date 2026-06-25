@@ -13,7 +13,6 @@ from .utils import (
     parse_srt,
     write_srt_entries,
     translate_srt_entries,
-    prepare_burn_subtitles,
     build_word_aligned_segments,
     str2bool,
 )
@@ -42,17 +41,26 @@ class SubtitleConfig:
     model: str = "small"
     translate_to: str = "vi"
     translation_engine: str = "openai"
-    subtitle_margin_bottom: float = 32.0
+    subtitle_margin_bottom: float = 32.0   # % of video height (legacy compat)
     subtitle_font_size: int = 55
     subtitle_font_color: str = "#9333EA"
     subtitle_background_color: str = "#FFFFFF"
-    subtitle_box_padding: int = 14
+    subtitle_box_padding: int = 14         # used only in classic ASS mode
     subtitle_reference_height: int = 1920
     language: str = "auto"
     task: str = "transcribe"
     translation_topic: str = "economics"
-    source_language: str = "en"  # "en" or "vi"
+    source_language: str = "en"            # "en" or "vi"
     vi_loanword_openai: bool = True
+    # Rounded subtitle style (rounded mode only)
+    subtitle_style_mode: str = "rounded"   # "rounded" | "classic"
+    subtitle_border_radius: int = 18
+    subtitle_padding_x: int = 28
+    subtitle_padding_y: int = 16
+    subtitle_text_safe_padding_y: int = 12
+    subtitle_background_opacity: float = 0.92
+    subtitle_max_width_ratio: float = 0.86
+    subtitle_line_spacing: float = 1.15
 
     @classmethod
     def from_env(cls) -> "SubtitleConfig":
@@ -73,6 +81,14 @@ class SubtitleConfig:
             vi_loanword_openai=str2bool(
                 _env_str("VI_LOANWORD_OPENAI_FIX", "true")
             ),
+            subtitle_style_mode=_env_str("SUBTITLE_STYLE_MODE", "rounded"),
+            subtitle_border_radius=_env_int("SUBTITLE_BORDER_RADIUS", 18),
+            subtitle_padding_x=_env_int("SUBTITLE_PADDING_X", 28),
+            subtitle_padding_y=_env_int("SUBTITLE_PADDING_Y", 16),
+            subtitle_text_safe_padding_y=_env_int("SUBTITLE_TEXT_SAFE_PADDING_Y", 12),
+            subtitle_background_opacity=_env_float("SUBTITLE_BACKGROUND_OPACITY", 0.92),
+            subtitle_max_width_ratio=_env_float("SUBTITLE_MAX_WIDTH_RATIO", 0.86),
+            subtitle_line_spacing=_env_float("SUBTITLE_LINE_SPACING", 1.15),
         )
 
 
@@ -194,27 +210,27 @@ def burn_subtitles(
     config: SubtitleConfig,
     on_progress: Optional[ProgressCallback] = None,
 ) -> str:
+    from .subtitle_renderer import SubtitleRenderStyle, burn_subtitles as _render
+
     _report(on_progress, "Rendering video with subtitles...", 80)
-    ass_path = prepare_burn_subtitles(
-        srt_path,
-        video_path,
-        config.subtitle_margin_bottom,
-        config.subtitle_font_size,
-        config.subtitle_font_color,
-        config.subtitle_background_color,
-        config.subtitle_box_padding,
-        config.subtitle_reference_height,
+
+    style = SubtitleRenderStyle(
+        mode=config.subtitle_style_mode,
+        border_radius=config.subtitle_border_radius,
+        padding_x=config.subtitle_padding_x,
+        padding_y=config.subtitle_padding_y,
+        text_safe_padding_y=config.subtitle_text_safe_padding_y,
+        background_color=config.subtitle_background_color,
+        background_opacity=config.subtitle_background_opacity,
+        text_color=config.subtitle_font_color,
+        font_size=config.subtitle_font_size,
+        bottom_margin_ratio=config.subtitle_margin_bottom / 100.0,
+        max_width_ratio=config.subtitle_max_width_ratio,
+        line_spacing=config.subtitle_line_spacing,
+        reference_height=config.subtitle_reference_height,
     )
 
-    video = ffmpeg.input(video_path)
-    audio = video.audio
-    ffmpeg.concat(
-        video.filter("subtitles", ass_path),
-        audio,
-        v=1,
-        a=1,
-    ).output(output_path).run(quiet=True, overwrite_output=True)
-
+    _render(video_path, srt_path, output_path, style)
     _report(on_progress, "Done", 100)
     return output_path
 

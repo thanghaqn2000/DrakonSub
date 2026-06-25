@@ -164,6 +164,171 @@ def _rotation_requires_dimension_swap(rotation_degrees: int) -> bool:
     return normalized in (90, 270)
 
 
+def normalize_video_rotation_degrees(rotation_degrees: int) -> int:
+    """Normalize rotation metadata to 0–359 degrees."""
+    return int(rotation_degrees) % 360
+
+
+def ffmpeg_rotation_normalize_filter(rotation_degrees: int) -> Optional[str]:
+    """
+    FFmpeg filter that bakes display orientation into pixel data.
+
+    Returns None when no rotation correction is needed (0°).
+    Used before subtitle overlay so layout coords match the frame FFmpeg sees.
+    """
+    norm = normalize_video_rotation_degrees(rotation_degrees)
+    if norm == 0:
+        return None
+    if norm == 90:
+        return "transpose=2"
+    if norm == 180:
+        return "hflip,vflip"
+    if norm == 270:
+        return "transpose=1"
+    return None
+
+
+def _visual_orientation(display_width: int, display_height: int) -> str:
+    if display_height > display_width:
+        return "portrait"
+    if display_width > display_height:
+        return "landscape"
+    return "square"
+
+
+def probe_video_orientation(video_path: str) -> dict:
+    """
+    Probe stored/display dimensions and visual orientation for a video file.
+
+    visual_orientation is derived from display dimensions (what a player shows).
+    """
+    display_w, display_h, stored_w, stored_h, rotation = get_video_display_size(
+        video_path
+    )
+    return {
+        "stored_width": stored_w,
+        "stored_height": stored_h,
+        "rotation": rotation,
+        "display_width": display_w,
+        "display_height": display_h,
+        "visual_orientation": _visual_orientation(display_w, display_h),
+    }
+
+
+def video_stream_has_rotation_metadata(video_path: str) -> bool:
+    """True when the video stream still carries non-zero rotation metadata."""
+    import ffmpeg
+
+    probe = ffmpeg.probe(video_path)
+    video_stream = next(
+        stream for stream in probe["streams"] if stream["codec_type"] == "video"
+    )
+    if normalize_video_rotation_degrees(_extract_video_rotation_degrees(video_stream)) != 0:
+        return True
+
+    for side_data in video_stream.get("side_data_list") or []:
+        rot = side_data.get("rotation")
+        if rot is not None and normalize_video_rotation_degrees(rot) != 0:
+            return True
+
+    rotate_tag = (video_stream.get("tags") or {}).get("rotate")
+    if rotate_tag is not None and str(rotate_tag).strip() not in ("", "0"):
+        try:
+            if normalize_video_rotation_degrees(int(rotate_tag)) != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+
+    return False
+
+
+def ffmpeg_strip_rotation_metadata_args() -> List[str]:
+    """FFmpeg output args that prevent copying rotation / Display Matrix metadata."""
+    return [
+        "-map_metadata",
+        "-1",
+        "-metadata:s:v:0",
+        "rotate=0",
+    ]
+
+
+def ffmpeg_remux_strip_rotation(input_path: str, output_path: str) -> List[str]:
+    """Re-encode pass that strips rotation metadata when remux copy is insufficient."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-map_metadata",
+        "-1",
+        "-metadata:s:v:0",
+        "rotate=0",
+        "-c:a",
+        "copy",
+        output_path,
+    ]
+
+
+def ffmpeg_video_encode_args() -> List[str]:
+    """Explicit H.264 encode settings for subtitle burn output."""
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
+def validate_output_orientation(input_path: str, output_path: str) -> None:
+    """
+    Ensure output matches input visual display size and orientation.
+
+    Raises RuntimeError when display dimensions or orientation differ.
+    """
+    inp = probe_video_orientation(input_path)
+    out = probe_video_orientation(output_path)
+    if (
+        inp["display_width"] != out["display_width"]
+        or inp["display_height"] != out["display_height"]
+    ):
+        raise RuntimeError(
+            "Output display dimensions "
+            f"{out['display_width']}x{out['display_height']} do not match input "
+            f"{inp['display_width']}x{inp['display_height']}"
+        )
+    if inp["visual_orientation"] != out["visual_orientation"]:
+        raise RuntimeError(
+            "Output visual orientation "
+            f"{out['visual_orientation']} does not match input "
+            f"{inp['visual_orientation']}"
+        )
+
+
+def log_video_orientation_probe(label: str, video_path: str) -> dict:
+    """Probe a video and print a structured orientation log line."""
+    info = probe_video_orientation(video_path)
+    print(
+        f"[Renderer] {label}: "
+        f"stored={info['stored_width']}x{info['stored_height']} | "
+        f"rotation={info['rotation']}° | "
+        f"display={info['display_width']}x{info['display_height']} | "
+        f"visual={info['visual_orientation']}"
+    )
+    return info
+
+
 def get_video_display_size(video_path: str) -> tuple[int, int, int, int, int]:
     """
     Return video dimensions for layout/rendering (display-oriented).

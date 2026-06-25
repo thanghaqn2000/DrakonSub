@@ -29,8 +29,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import asdict, dataclass, fields
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Optional Pillow import
@@ -73,6 +73,76 @@ class SubtitleRenderStyle:
     max_width_ratio: float = 0.86         # fraction of video width
     line_spacing: float = 1.2
     reference_height: int = 1920          # used for responsive scaling
+    x_ratio: Optional[float] = None       # box center X (0–1); None = bottom-center legacy
+    y_ratio: Optional[float] = None       # box center Y (0–1); None = bottom-center legacy
+    font_family: str = "arial_bold"      # preset key; see FONT_PRESETS
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize style to a JSON-friendly layout dict."""
+        data = asdict(self)
+        data["width_ratio"] = self.max_width_ratio
+        for key in ("text_safe_padding_y", "bottom_margin_ratio", "line_spacing", "reference_height"):
+            data.pop(key, None)
+        if self.x_ratio is None:
+            data.pop("x_ratio", None)
+        if self.y_ratio is None:
+            data.pop("y_ratio", None)
+        data.pop("max_width_ratio", None)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SubtitleRenderStyle":
+        """Build a style from a layout JSON object."""
+        known = {f.name for f in fields(cls)}
+        kwargs: Dict[str, Any] = {}
+        for key, value in data.items():
+            if key == "width_ratio":
+                kwargs["max_width_ratio"] = float(value)
+            elif key in known:
+                kwargs[key] = value
+        if "max_width_ratio" not in kwargs and "max_width_ratio" in data:
+            kwargs["max_width_ratio"] = float(data["max_width_ratio"])
+        return cls(**{k: v for k, v in kwargs.items() if k in known})
+
+    def uses_custom_position(self) -> bool:
+        """True when x_ratio and y_ratio drive placement instead of bottom margin."""
+        return self.x_ratio is not None and self.y_ratio is not None
+
+
+def default_layout_dict() -> Dict[str, Any]:
+    """Default layout JSON for the layout editor (env values + editor defaults)."""
+    style = load_render_style()
+    return {
+        "mode": style.mode,
+        "x_ratio": 0.5,
+        "y_ratio": 0.78,
+        "width_ratio": style.max_width_ratio,
+        "font_size": style.font_size,
+        "text_color": style.text_color,
+        "background_color": style.background_color,
+        "background_opacity": style.background_opacity,
+        "border_radius": style.border_radius,
+        "padding_x": style.padding_x,
+        "padding_y": style.padding_y,
+        "font_family": style.font_family,
+    }
+
+
+def layout_dict_from_config(config) -> Dict[str, Any]:
+    """Build initial layout JSON from a SubtitleConfig used during Generate."""
+    layout = default_layout_dict()
+    layout["font_size"] = config.subtitle_font_size
+    layout["text_color"] = config.subtitle_font_color
+    layout["background_color"] = config.subtitle_background_color
+    layout["background_opacity"] = config.subtitle_background_opacity
+    layout["border_radius"] = config.subtitle_border_radius
+    layout["padding_x"] = config.subtitle_padding_x
+    layout["padding_y"] = config.subtitle_padding_y
+    layout["width_ratio"] = config.subtitle_max_width_ratio
+    layout["mode"] = config.subtitle_style_mode
+    if config.subtitle_bottom_margin_ratio is not None:
+        layout["y_ratio"] = max(0.0, min(1.0, 1.0 - config.subtitle_bottom_margin_ratio))
+    return layout
 
 
 def load_render_style() -> SubtitleRenderStyle:
@@ -136,34 +206,94 @@ def _hex_to_rgb(color: str) -> Tuple[int, int, int]:
 # Font loading
 # ---------------------------------------------------------------------------
 
-# Ordered candidate paths from most to least preferred.
+# Font presets for layout editor (no arbitrary upload).
+FONT_PRESETS: Dict[str, List[str]] = {
+    "arial_bold": [
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ],
+    "arial": [
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ],
+    "dejavu_bold": [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ],
+    "dejavu": [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ],
+    "system_default": [],
+}
+
+FONT_FAMILY_CHOICES = tuple(FONT_PRESETS.keys())
+
+# Ultimate fallback paths when preset candidates are exhausted.
 _FONT_CANDIDATES = [
-    "/Library/Fonts/Arial Bold.ttf",
-    "/Library/Fonts/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",
     "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
 ]
 
 
-def _load_font(size: int) -> "ImageFont.FreeTypeFont":
-    """
-    Load a TrueType font at *size* points, trying common system paths in order.
+def _font_paths_for_preset(font_family: str) -> List[str]:
+    """Ordered font file candidates for a named preset."""
+    preset = (font_family or "arial_bold").strip().lower()
+    if preset == "system_default":
+        return list(_FONT_CANDIDATES)
+    paths = list(FONT_PRESETS.get(preset, []))
+    if not paths:
+        return list(_FONT_CANDIDATES)
+    # De-duplicate while preserving order; append global fallbacks last.
+    seen = set()
+    ordered: List[str] = []
+    for path in paths + _FONT_CANDIDATES:
+        if path not in seen:
+            seen.add(path)
+            ordered.append(path)
+    return ordered
 
-    Falls back to PIL's built-in bitmap font if nothing is found — text will
-    still render but at a fixed small size.
+
+def _load_font(size: int, font_family: str = "arial_bold") -> Tuple[Any, Optional[str]]:
     """
-    for path in _FONT_CANDIDATES:
+    Load a TrueType font at *size* points from a named preset.
+
+    Returns (font, resolved_path). resolved_path is None only when falling back
+    to PIL's built-in bitmap font.
+    """
+    for path in _font_paths_for_preset(font_family):
         if os.path.isfile(path):
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(path, size)
+                return font, path
             except Exception:
                 continue
-    return ImageFont.load_default()
+    print(
+        "WARNING: No TrueType font found. Subtitle render may look incorrect."
+    )
+    return ImageFont.load_default(), None
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +416,7 @@ def _render_cue_image(
     bottom_margin = round(video_h * bottom_margin_ratio)
     max_box_w = max(1, round(video_w * max_width_ratio))
 
-    font = _load_font(font_size)
+    font, _font_path = _load_font(font_size, style.font_family)
 
     # Word-wrap to fit inside the box (minus padding).
     inner_max_w = max(1, max_box_w - 2 * pad_x)
@@ -331,9 +461,15 @@ def _render_cue_image(
     img_path = os.path.join(tmp_dir, f"sub_{index:04d}.png")
     img.save(img_path, "PNG")
 
-    # Overlay position: centered horizontally, near bottom.
-    ov_x = (video_w - box_w) // 2
-    ov_y = max(0, video_h - box_h - bottom_margin)
+    # Overlay position: custom center (layout editor) or legacy bottom-center.
+    if style.uses_custom_position():
+        x_ratio = min(1.0, max(0.0, float(style.x_ratio)))
+        y_ratio = min(1.0, max(0.0, float(style.y_ratio)))
+        ov_x = round(video_w * x_ratio - box_w / 2)
+        ov_y = round(video_h * y_ratio - box_h / 2)
+    else:
+        ov_x = (video_w - box_w) // 2
+        ov_y = max(0, video_h - box_h - bottom_margin)
     ov_x, ov_y = _clamp_overlay_position(ov_x, ov_y, box_w, box_h, video_w, video_h)
 
     return _CueOverlay(image_path=img_path, x=ov_x, y=ov_y, start=0.0, end=0.0)
@@ -447,10 +583,30 @@ def _burn_rounded(
     Internal implementation of the rounded-corner subtitle burn.
 
     Renders per-cue PNGs with Pillow, then chains them as FFmpeg overlays.
+    Rotated videos are normalized to display orientation before overlay.
+    Output rotation metadata is stripped so players do not double-rotate.
     """
-    from .utils import parse_srt
+    from .utils import (
+        ffmpeg_remux_strip_rotation,
+        ffmpeg_strip_rotation_metadata_args,
+        ffmpeg_video_encode_args,
+        log_video_orientation_probe,
+        parse_srt,
+        probe_video_orientation,
+        validate_output_orientation,
+        video_stream_has_rotation_metadata,
+    )
+
+    input_probe = log_video_orientation_probe("input_probe", video_path)
 
     video_w, video_h, stored_w, stored_h, rotation = _get_video_size(video_path)
+    base_w, base_h = video_w, video_h
+    # FFmpeg autorotate (default, no -noautorotate) presents [0:v] in display
+    # orientation — equivalent to baking rotation before overlay, without
+    # preserving stale Display Matrix metadata on the output stream.
+    orientation_mode = (
+        "autorotate (implicit)" if rotation else "none"
+    )
 
     scale = video_h / max(style.reference_height, 1)
     scaled_font = max(12, round(style.font_size * scale))
@@ -458,11 +614,22 @@ def _burn_rounded(
     scaled_pad = max(6, round(style.padding_x * scale))
     bottom_px = round(video_h * style.bottom_margin_ratio)
 
+    probe_font, probe_path = _load_font(scaled_font, style.font_family)
+    try:
+        ascent, descent = probe_font.getmetrics()
+    except Exception:
+        ascent, descent = 0, 0
+
     print(
-        f"\n[Renderer] mode=rounded | "
+        f"[Renderer] mode=rounded | "
         f"stored={stored_w}x{stored_h} | rotation={rotation}° | "
         f"display={video_w}x{video_h} | "
+        f"ffmpeg_base_frame={base_w}x{base_h} | "
+        f"orientation_normalize={orientation_mode} | "
+        f"font_family={style.font_family} | "
+        f"font_path={probe_path} | "
         f"font_size={scaled_font}px | "
+        f"font_metrics=({ascent},{descent}) | "
         f"border_radius={scaled_radius}px | "
         f"padding={scaled_pad}px | "
         f"bottom_margin={bottom_px}px"
@@ -489,14 +656,24 @@ def _burn_rounded(
         if not overlays:
             return _burn_classic(video_path, srt_path, output_path, style)
 
-        # Build FFmpeg command.
+        if overlays:
+            first = overlays[0]
+            from PIL import Image as _PILImage
+            with _PILImage.open(first.image_path) as _img:
+                _ow, _oh = _img.size
+            print(
+                f"[Renderer] first_overlay x={first.x} y={first.y} "
+                f"box={_ow}x{_oh} (on {base_w}x{base_h} frame)"
+            )
+
+        # Autorotate on decode (default): [0:v] matches display dimensions.
         cmd = ["ffmpeg", "-y", "-i", video_path]
         for ov in overlays:
             cmd += ["-i", ov.image_path]
 
-        # Build filter_complex: chain overlays one after another.
         parts: List[str] = []
         prev = "[0:v]"
+
         for j, ov in enumerate(overlays):
             inp = f"[{j + 1}:v]"
             out = "[vout]" if j == len(overlays) - 1 else f"[v{j}]"
@@ -507,8 +684,9 @@ def _burn_rounded(
             prev = out
 
         filter_str = ";".join(parts)
+        preview = filter_str if len(filter_str) <= 500 else filter_str[:500] + "..."
+        print(f"[Renderer] filtergraph={preview}")
 
-        # Write filter to a script file if it exceeds a safe threshold.
         filter_script: Optional[str] = None
         if len(filter_str) > 80_000:
             filter_script = os.path.join(tmp_dir, "filter.txt")
@@ -518,11 +696,52 @@ def _burn_rounded(
         else:
             cmd += ["-filter_complex", filter_str]
 
-        cmd += ["-map", "[vout]", "-map", "0:a", "-c:a", "copy", output_path]
+        cmd += ["-map", "[vout]", "-map", "0:a?"]
+        cmd += ffmpeg_video_encode_args()
+        cmd += ["-c:a", "copy"]
+        cmd += ffmpeg_strip_rotation_metadata_args()
+        cmd.append(output_path)
 
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr[-600:] if proc.stderr else "FFmpeg error")
+
+        log_video_orientation_probe("output_probe", output_path)
+        metadata_stripped = not video_stream_has_rotation_metadata(output_path)
+        print(f"[Renderer] metadata_strip_succeeded={metadata_stripped}")
+
+        if not metadata_stripped:
+            remux_path = os.path.join(tmp_dir, "remux.mp4")
+            print("[Renderer] fallback_remux=true (stale rotation metadata detected)")
+            remux_cmd = ffmpeg_remux_strip_rotation(output_path, remux_path)
+            remux_proc = subprocess.run(remux_cmd, capture_output=True, text=True)
+            if remux_proc.returncode != 0:
+                raise RuntimeError(
+                    remux_proc.stderr[-600:] if remux_proc.stderr else "Remux failed"
+                )
+            shutil.move(remux_path, output_path)
+            log_video_orientation_probe("output_probe_after_remux", output_path)
+            metadata_stripped = not video_stream_has_rotation_metadata(output_path)
+            print(f"[Renderer] metadata_strip_succeeded={metadata_stripped}")
+        else:
+            print("[Renderer] fallback_remux=false")
+
+        if not metadata_stripped:
+            raise RuntimeError(
+                "Output still contains rotation metadata after render and remux"
+            )
+
+        validate_output_orientation(video_path, output_path)
+        out_probe = probe_video_orientation(output_path)
+        print(
+            f"[Renderer] orientation_validation=passed | "
+            f"input_display={input_probe['display_width']}x"
+            f"{input_probe['display_height']} "
+            f"{input_probe['visual_orientation']} -> "
+            f"output_display={out_probe['display_width']}x"
+            f"{out_probe['display_height']} "
+            f"{out_probe['visual_orientation']}"
+        )
 
         return output_path
 

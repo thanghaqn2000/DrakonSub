@@ -84,6 +84,7 @@ def _get_pipeline(model_name: str, on_progress: Optional[ProgressCallback] = Non
     if _pipeline is not None and _pipeline_model_name == model_name:
         return _pipeline
 
+    import torch
     from transformers import pipeline as hf_pipeline
 
     if on_progress:
@@ -106,7 +107,7 @@ def _get_pipeline(model_name: str, on_progress: Optional[ProgressCallback] = Non
             _pipeline = hf_pipeline(
                 task="automatic-speech-recognition",
                 model=model_name,
-                torch_dtype=dtype,
+                torch_dtype=torch.float32,
                 device="cpu",
                 chunk_length_s=30,
                 model_kwargs={"attn_implementation": "eager"},
@@ -191,12 +192,13 @@ def transcribe_vi(
         global _pipeline, _pipeline_model_name
         _pipeline = None
         _pipeline_model_name = None
+        import torch
         from transformers import pipeline as hf_pipeline
 
         pipe = hf_pipeline(
             task="automatic-speech-recognition",
             model=model_name,
-            torch_dtype=_pick_device()[1],
+            torch_dtype=torch.float32,
             device="cpu",
             chunk_length_s=30,
             model_kwargs={"attn_implementation": "eager"},

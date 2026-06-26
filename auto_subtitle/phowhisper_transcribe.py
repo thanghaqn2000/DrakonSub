@@ -47,7 +47,15 @@ def sanitize_vi_transcription_text(text: str) -> str:
 
 def _generate_kwargs(pipe) -> dict:
     """Generation kwargs with Whisper unk placeholders suppressed."""
-    suppressed = list(pipe.generation_config.suppress_tokens or [])
+    generation_config = getattr(pipe, "generation_config", None)
+    if generation_config is None:
+        generation_config = getattr(getattr(pipe, "model", None), "generation_config", None)
+
+    suppress_tokens = []
+    if generation_config is not None:
+        suppress_tokens = list(getattr(generation_config, "suppress_tokens", []) or [])
+
+    suppressed = suppress_tokens
     for token_id in (WHISPER_UNK_TOKEN_ID, WHISPER_UNKNOWN_TOKEN_ID):
         if token_id not in suppressed:
             suppressed.append(token_id)
@@ -64,7 +72,9 @@ def _pick_device() -> tuple:
     if torch.cuda.is_available():
         return "cuda:0", torch.float16
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps", torch.float32
+        # Whisper generation in current stack hits unsupported torch ops on MPS
+        # (e.g. torch.isin in logits processors). Use CPU for stability.
+        return "cpu", torch.float32
     return "cpu", torch.float32
 
 
@@ -84,8 +94,9 @@ def _get_pipeline(model_name: str, on_progress: Optional[ProgressCallback] = Non
         _pipeline = hf_pipeline(
             task="automatic-speech-recognition",
             model=model_name,
-            dtype=dtype,
+            torch_dtype=dtype,
             device=device,
+            chunk_length_s=30,
             model_kwargs={"attn_implementation": "eager"},
         )
     except Exception:
@@ -95,8 +106,9 @@ def _get_pipeline(model_name: str, on_progress: Optional[ProgressCallback] = Non
             _pipeline = hf_pipeline(
                 task="automatic-speech-recognition",
                 model=model_name,
-                dtype=dtype,
+                torch_dtype=dtype,
                 device="cpu",
+                chunk_length_s=30,
                 model_kwargs={"attn_implementation": "eager"},
             )
         else:
@@ -184,8 +196,9 @@ def transcribe_vi(
         pipe = hf_pipeline(
             task="automatic-speech-recognition",
             model=model_name,
-            dtype=_pick_device()[1],
+            torch_dtype=_pick_device()[1],
             device="cpu",
+            chunk_length_s=30,
             model_kwargs={"attn_implementation": "eager"},
         )
         _pipeline = pipe

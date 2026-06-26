@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+import traceback
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -250,6 +251,7 @@ def _run_job(job_id: str) -> None:
             jobs[job_id].message = "Complete"
             jobs[job_id].progress = 100
     except Exception as exc:
+        traceback.print_exc()
         with jobs_lock:
             jobs[job_id].status = JobStatus.ERROR
             jobs[job_id].error = str(exc)

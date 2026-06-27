@@ -9,7 +9,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .config import get_openai_model, load_env
+from .config import (
+    SUPPORTED_TRANSLATION_ENGINES,
+    get_openai_model,
+    get_translation_engine,
+    load_env,
+)
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,10 +50,12 @@ class Job:
     output_path: Optional[str] = None
     error: Optional[str] = None
     input_path: Optional[str] = None
+    source_srt_path: Optional[str] = None
     srt_path: Optional[str] = None
     layout_path: Optional[str] = None
     layout_saved: bool = False
     translation_topic: str = DEFAULT_TOPIC
+    translation_engine: str = "openai"
     subtitle_font_size: Optional[int] = None
     subtitle_font_color: Optional[str] = None
     source_language: str = "en"
@@ -90,6 +97,7 @@ def parse_font_color(value: Optional[str], default: str) -> str:
 def build_subtitle_config(job: Job) -> SubtitleConfig:
     config = SubtitleConfig.from_env()
     config.translation_topic = job.translation_topic
+    config.translation_engine = job.translation_engine
     config.source_language = job.source_language
     if job.subtitle_font_size is not None:
         config.subtitle_font_size = job.subtitle_font_size
@@ -98,9 +106,9 @@ def build_subtitle_config(job: Job) -> SubtitleConfig:
     return config
 
 
-def _job_paths(job_id: str) -> tuple[Path, Path, Path]:
+def _job_paths(job_id: str) -> tuple[Path, Path, Path, Path]:
     job_dir = JOBS_ROOT / job_id
-    return job_dir, job_dir / "vi.srt", job_dir / "layout.json"
+    return job_dir, job_dir / "source.srt", job_dir / "vi.srt", job_dir / "layout.json"
 
 
 def _read_layout_file(path: str) -> Dict[str, Any]:
@@ -213,6 +221,12 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         "download_url": f"/api/jobs/{job.id}/download"
         if job.status == JobStatus.DONE
         else None,
+        "source_srt_download_url": f"/api/jobs/{job.id}/download/source-srt"
+        if job.status == JobStatus.DONE and job.source_srt_path and os.path.isfile(job.source_srt_path)
+        else None,
+        "vi_srt_download_url": f"/api/jobs/{job.id}/download/vi-srt"
+        if job.status == JobStatus.DONE and job.srt_path and os.path.isfile(job.srt_path)
+        else None,
     }
 
 
@@ -228,10 +242,11 @@ def _run_job(job_id: str) -> None:
             job.status = JobStatus.PROCESSING
             job.message = "Starting..."
             job.progress = 0
-            job_dir, srt_path, layout_path = _job_paths(job_id)
+            job_dir, source_srt_path, srt_path, layout_path = _job_paths(job_id)
             output_path = str(job_dir / f"{job.output_name}.mp4")
             video_path = job.input_path
             config = build_subtitle_config(job)
+            job.source_srt_path = str(source_srt_path)
             job.srt_path = str(srt_path)
             job.layout_path = str(layout_path)
 
@@ -241,6 +256,7 @@ def _run_job(job_id: str) -> None:
             config=config,
             on_progress=on_progress,
             persist_srt_path=str(srt_path),
+            persist_source_srt_path=str(source_srt_path),
             persist_layout_path=str(layout_path),
         )
 
@@ -276,7 +292,7 @@ def reburn_job_subtitles(
             raise RuntimeError("Original video not found")
         if not job.srt_path or not os.path.isfile(job.srt_path):
             raise RuntimeError("vi.srt not found — run Generate first")
-        layout_path = job.layout_path or str(_job_paths(job_id)[2])
+        layout_path = job.layout_path or str(_job_paths(job_id)[3])
         if layout is None:
             if not os.path.isfile(layout_path):
                 raise RuntimeError("layout.json not found — save layout first")
@@ -350,6 +366,8 @@ def get_defaults():
         "subtitle_font_size": config.subtitle_font_size,
         "subtitle_font_color": config.subtitle_font_color,
         "openai_model": get_openai_model(),
+        "translation_engine": config.translation_engine,
+        "translation_engines": list(SUPPORTED_TRANSLATION_ENGINES),
         "default_layout": default_layout_dict(),
         "font_presets": list(FONT_FAMILY_CHOICES),
     }
@@ -363,6 +381,7 @@ async def create_job(
     font_size: Optional[str] = Form(None),
     font_color: Optional[str] = Form(None),
     source_language: str = Form("en"),
+    translation_engine: str = Form(get_translation_engine()),
 ):
     if not video.filename:
         raise HTTPException(400, "No file uploaded")
@@ -375,6 +394,12 @@ async def create_job(
         safe_topic = normalize_topic(topic)
         if source_language not in ("en", "vi"):
             raise ValueError("source_language must be 'en' or 'vi'")
+        translation_engine = (translation_engine or "").strip().lower()
+        if translation_engine not in SUPPORTED_TRANSLATION_ENGINES:
+            raise ValueError(
+                "translation_engine must be one of: "
+                + ", ".join(SUPPORTED_TRANSLATION_ENGINES)
+            )
         defaults = SubtitleConfig.from_env()
         parsed_font_size = (
             parse_font_size(font_size, defaults.subtitle_font_size)
@@ -399,15 +424,17 @@ async def create_job(
     input_path = job_dir / f"input{ext}"
     input_path.write_bytes(await video.read())
 
-    _, srt_path, layout_path = _job_paths(job_id)
+    _, source_srt_path, srt_path, layout_path = _job_paths(job_id)
 
     job = Job(
         id=job_id,
         output_name=final_name,
         input_path=str(input_path),
+        source_srt_path=str(source_srt_path),
         srt_path=str(srt_path),
         layout_path=str(layout_path),
         translation_topic=safe_topic,
+        translation_engine=translation_engine,
         subtitle_font_size=parsed_font_size,
         subtitle_font_color=parsed_font_color,
         source_language=source_language,
@@ -456,7 +483,7 @@ def put_job_layout(job_id: str, body: Dict[str, Any] = Body(...)):
             raise HTTPException(404, "Job not found")
         if job.status not in (JobStatus.DONE, JobStatus.ERROR):
             raise HTTPException(400, "Layout can only be saved after Generate completes")
-        layout_path = job.layout_path or str(_job_paths(job_id)[2])
+        layout_path = job.layout_path or str(_job_paths(job_id)[3])
 
     _write_layout_file(layout_path, layout)
 
@@ -538,6 +565,48 @@ def download_job(job_id: str):
         path,
         media_type="video/mp4",
         filename=f"{name}.mp4",
+    )
+
+
+@app.get("/api/jobs/{job_id}/download/source-srt")
+def download_job_source_srt(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.status != JobStatus.DONE or not job.source_srt_path:
+            raise HTTPException(400, "Source SRT is not ready yet")
+        path = job.source_srt_path
+        name = job.output_name
+
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Source SRT file not found")
+
+    return FileResponse(
+        path,
+        media_type="application/x-subrip",
+        filename=f"{name}.source.srt",
+    )
+
+
+@app.get("/api/jobs/{job_id}/download/vi-srt")
+def download_job_vi_srt(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.status != JobStatus.DONE or not job.srt_path:
+            raise HTTPException(400, "Vietnamese SRT is not ready yet")
+        path = job.srt_path
+        name = job.output_name
+
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Vietnamese SRT file not found")
+
+    return FileResponse(
+        path,
+        media_type="application/x-subrip",
+        filename=f"{name}.vi.srt",
     )
 
 

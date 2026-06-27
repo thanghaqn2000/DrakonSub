@@ -3,11 +3,12 @@ import shutil
 import tempfile
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 import ffmpeg
 import whisper
-from .config import load_env
+from .config import get_translation_engine, load_env
 
 from .utils import (
     write_srt,
@@ -78,6 +79,7 @@ class SubtitleConfig:
             bottom_margin_ratio = _env_float("SUBTITLE_MARGIN_BOTTOM", 32.0) / 100.0
 
         return cls(
+            translation_engine=get_translation_engine(),
             subtitle_margin_bottom=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
             subtitle_font_size=_env_int("SUBTITLE_FONT_SIZE", 55),
             subtitle_font_color=_env_str("SUBTITLE_FONT_COLOR", "#9333EA"),
@@ -284,6 +286,7 @@ def generate_vietsub(
     config: Optional[SubtitleConfig] = None,
     on_progress: Optional[ProgressCallback] = None,
     persist_srt_path: Optional[str] = None,
+    persist_source_srt_path: Optional[str] = None,
     persist_layout_path: Optional[str] = None,
 ) -> str:
     """Full pipeline: transcribe → (translate if EN) → burn subtitles."""
@@ -300,21 +303,132 @@ def generate_vietsub(
     transcribe_to_srt(audio_path, srt_path, config, on_progress)
 
     if config.source_language == "vi":
+        if persist_source_srt_path:
+            os.makedirs(
+                os.path.dirname(os.path.abspath(persist_source_srt_path)), exist_ok=True
+            )
+            shutil.copy2(srt_path, persist_source_srt_path)
         fix_vi_loanwords_file(srt_path, config, on_progress)
         final_srt = srt_path
     else:
+        artifact_dir = (
+            os.path.dirname(os.path.abspath(persist_srt_path))
+            if persist_srt_path
+            else work_dir
+        )
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        translation_source = srt_path
+        from .config import (
+            VI_COMPRESSION_ENABLED,
+            VI_FLOW_ENABLED,
+            en_domain_correction_enabled,
+            en_domain_correction_save_debug,
+            vi_editor_enabled,
+            vi_editor_save_debug,
+        )
+        from .en_domain_corrector import correct_en_domain_srt_file
+        from .vi_editor import edit_vi_srt_file
+
+        if en_domain_correction_enabled():
+            _report(on_progress, "Correcting English domain terms...", 48)
+            source_raw_path = os.path.join(artifact_dir, "source_raw.srt")
+            source_corrected_path = os.path.join(artifact_dir, "source_corrected.srt")
+            shutil.copy2(srt_path, source_raw_path)
+            correct_en_domain_srt_file(
+                srt_path,
+                source_corrected_path,
+                debug_dir=artifact_dir if en_domain_correction_save_debug() else None,
+            )
+            translation_source = source_corrected_path
+        else:
+            shutil.copy2(srt_path, os.path.join(artifact_dir, "source_raw.srt"))
+            shutil.copy2(srt_path, os.path.join(artifact_dir, "source_corrected.srt"))
+
+        if persist_source_srt_path:
+            os.makedirs(
+                os.path.dirname(os.path.abspath(persist_source_srt_path)), exist_ok=True
+            )
+            shutil.copy2(translation_source, persist_source_srt_path)
+
         final_srt = os.path.join(work_dir, "vi.srt")
-        translate_srt_file(srt_path, final_srt, config, on_progress)
+        translate_srt_file(translation_source, final_srt, config, on_progress)
+
+        vi_raw_path = os.path.join(artifact_dir, "vi_raw.srt")
+        shutil.copy2(final_srt, vi_raw_path)
+
+        if vi_editor_enabled():
+            _report(on_progress, "Editing Vietnamese subtitles...", 62)
+            vi_editor_path = os.path.join(artifact_dir, "vi_editor.srt")
+            edit_vi_srt_file(
+                translation_source,
+                final_srt,
+                vi_editor_path,
+                translation_engine=config.translation_engine,
+                topic=config.translation_topic,
+                on_progress=on_progress,
+                debug_dir=artifact_dir if vi_editor_save_debug() else None,
+            )
+            shutil.copy2(vi_editor_path, final_srt)
+        else:
+            shutil.copy2(final_srt, os.path.join(artifact_dir, "vi_editor.srt"))
+
+        from .vi_compression import compress_vi_srt_file
+
+        if VI_COMPRESSION_ENABLED:
+            _report(on_progress, "Compressing Vietnamese subtitles...", 65)
+            compress_vi_srt_file(final_srt)
+            shutil.copy2(final_srt, os.path.join(artifact_dir, "vi_after_compression.srt"))
+
+        from .vi_flow import flow_vi_srt_file
+
+        if VI_FLOW_ENABLED:
+            _report(on_progress, "Improving Vietnamese cue flow...", 67)
+            flow_vi_srt_file(translation_source, final_srt)
+            shutil.copy2(final_srt, os.path.join(artifact_dir, "vi_after_flow.srt"))
 
     # Shorten verbose Vietnamese text to improve readability (in-place, opt-out via env).
     from .subtitle_readability_optimizer import optimize_readability_file
     _report(on_progress, "Optimising subtitle readability...", 68)
+
+    if config.source_language != "vi":
+        artifact_dir = (
+            os.path.dirname(os.path.abspath(persist_srt_path))
+            if persist_srt_path
+            else work_dir
+        )
+        os.environ["DRAKONSUB_VI_BEFORE_READABILITY_SRT"] = str(
+            Path(artifact_dir) / "vi_before_readability.srt"
+        )
+        os.environ["DRAKONSUB_VI_AFTER_READABILITY_SRT"] = str(
+            Path(artifact_dir) / "vi_after_readability.srt"
+        )
+    else:
+        os.environ.pop("DRAKONSUB_VI_BEFORE_READABILITY_SRT", None)
+        os.environ.pop("DRAKONSUB_VI_AFTER_READABILITY_SRT", None)
+
     optimize_readability_file(final_srt)
 
     # Adjust cue timing for comfortable Vietnamese reading (in-place, opt-out via env).
-    from .subtitle_timing_optimizer import optimize_srt_timing_file
+    from .subtitle_timing_optimizer import (
+        normalize_final_srt_timing,
+        optimize_srt_timing_file,
+    )
     _report(on_progress, "Optimising subtitle timing...", 74)
     optimize_srt_timing_file(final_srt)
+
+    artifact_dir = (
+        os.path.dirname(os.path.abspath(persist_srt_path))
+        if persist_srt_path
+        else work_dir
+    )
+    os.makedirs(artifact_dir, exist_ok=True)
+    shutil.copy2(
+        final_srt, os.path.join(artifact_dir, "vi_before_timing_normalize.srt")
+    )
+    _report(on_progress, "Normalising subtitle timing...", 78)
+    normalize_final_srt_timing(final_srt)
+    shutil.copy2(final_srt, os.path.join(artifact_dir, "vi_final.srt"))
 
     layout = layout_dict_from_config(config)
 

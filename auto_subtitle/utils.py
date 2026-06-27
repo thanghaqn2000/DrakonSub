@@ -1,7 +1,7 @@
 import os
 import re
 import tempfile
-from typing import Iterator, List, Optional, TextIO
+from typing import Dict, Iterator, List, Optional, TextIO
 
 
 def str2bool(string):
@@ -467,8 +467,10 @@ def parse_srt(content: str) -> List[dict]:
     entries = []
     for block in re.split(r"\n\s*\n", content.strip()):
         lines = block.strip().split("\n")
-        if len(lines) < 3:
+        if len(lines) < 2:
             continue
+        if len(lines) < 3:
+            lines.append("")
         start_str, end_str = lines[1].split(" --> ")
         entries.append({
             "start_str": start_str.strip(),
@@ -480,10 +482,13 @@ def parse_srt(content: str) -> List[dict]:
 
 def write_srt_entries(entries: List[dict], file: TextIO):
     for i, entry in enumerate(entries, start=1):
+        text = entry["text"].strip().replace("-->", "->")
+        if not text:
+            text = " "
         print(
             f"{i}\n"
             f"{entry['start_str']} --> {entry['end_str']}\n"
-            f"{entry['text'].strip().replace('-->', '->')}\n",
+            f"{text}\n",
             file=file,
             flush=True,
         )
@@ -496,23 +501,53 @@ def translate_srt_entries(
     engine: str = "openai",
     topic: Optional[str] = None,
 ) -> List[dict]:
+    engine = (engine or "openai").strip().lower()
+
     if engine == "openai":
         from .openai_translate import translate_srt_entries_openai
 
         return translate_srt_entries_openai(
             entries, target_lang=target_lang, topic=topic
         )
+    if engine == "gemini":
+        from .gemini_translate import translate_srt_entries_gemini
 
-    from deep_translator import GoogleTranslator
+        return translate_srt_entries_gemini(
+            entries, target_lang=target_lang, topic=topic
+        )
 
-    translator = GoogleTranslator(source=source_lang, target=target_lang)
-    translated = []
+    raise ValueError(f"Unsupported translation engine: {engine}")
 
-    for entry in entries:
-        text = entry["text"].strip()
-        if not text:
-            translated.append({**entry, "text": text})
-            continue
-        translated.append({**entry, "text": translator.translate(text)})
 
-    return translated
+def export_translation_ab_srt(
+    srt_path: str,
+    output_dir: str,
+    target_lang: str = "vi",
+    topic: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Translate one source SRT with both engines for quick quality A/B comparison.
+
+    Output files:
+    - vi_openai.srt
+    - vi_gemini.srt
+    """
+    with open(srt_path, encoding="utf-8") as f:
+        entries = parse_srt(f.read())
+
+    os.makedirs(output_dir, exist_ok=True)
+    outputs: Dict[str, str] = {}
+    for engine in ("openai", "gemini"):
+        translated = translate_srt_entries(
+            entries=entries,
+            target_lang=target_lang,
+            source_lang="en",
+            engine=engine,
+            topic=topic,
+        )
+        out_path = os.path.join(output_dir, f"{target_lang}_{engine}.srt")
+        with open(out_path, "w", encoding="utf-8") as out_fp:
+            write_srt_entries(translated, file=out_fp)
+        outputs[engine] = out_path
+
+    return outputs

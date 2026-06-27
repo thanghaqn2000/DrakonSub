@@ -9,11 +9,43 @@ from .config import (
     get_translation_batch_size,
     translation_polish_enabled,
 )
-from .translation_topics import build_polish_system_prompt, build_system_prompt, normalize_topic
+from .translation_topics import TOPICS, build_polish_system_prompt, build_system_prompt, normalize_topic
 from .openai_chat import create_chat_completion
 
 # Punctuation that signals the end of a sentence / phrase group.
 _SENTENCE_END_CHARS = frozenset(".!?…")
+
+_CONTEXT_WINDOW = 5
+
+_OPENAI_RAW_LOCALIZATION_SYSTEM = """You are a professional Vietnamese subtitle localization editor.
+
+Your job is not to translate words.
+Your job is to rewrite the speaker's meaning into natural Vietnamese subtitles.
+
+Audience: Vietnamese Facebook/Reels/TikTok viewers.
+
+Style:
+- Very easy to understand.
+- Natural spoken Vietnamese.
+- Concise enough for subtitles.
+- Avoid robotic or literal translation.
+- Preserve the speaker's intent and tone.
+- Do not add new ideas or remove important ideas.
+- Keep names, numbers, and financial terms accurate.
+
+Important:
+- Read neighboring cues for context before translating each line.
+- Use context to resolve pronouns, fragments, and unfinished clauses.
+- Return exactly one Vietnamese subtitle per input cue.
+- Same count, same order.
+- Do not merge, split, skip, or leave any non-empty source cue blank.
+- Return JSON only."""
+
+_REPAIR_USER_SUFFIX = (
+    "\n\nREPAIR MODE: Your previous response failed validation "
+    "(wrong count, missing index, or empty text for a non-empty source cue). "
+    "Return exactly one non-empty Vietnamese subtitle for every non-empty source cue."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +118,97 @@ def _pack_groups_into_batches(
 # Prompt builders
 # ---------------------------------------------------------------------------
 
+def _parse_ts(ts: str) -> float:
+    ts = ts.strip()
+    time_part, millis_str = ts.split(",")
+    h, m, s = time_part.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(millis_str) / 1000.0
+
+
+def _build_openai_raw_system_prompt(topic: str) -> str:
+    topic_id = normalize_topic(topic)
+    topic_def = TOPICS[topic_id]
+    parts = [
+        _OPENAI_RAW_LOCALIZATION_SYSTEM,
+        f"Context topic/tone: {topic_def.label}",
+        topic_def.guidance,
+    ]
+    if topic_def.glossary:
+        parts.append(topic_def.glossary)
+    return "\n\n".join(parts)
+
+
+def _build_context_user_prompt(
+    batch_groups: List[List[int]],
+    all_texts: List[str],
+    target_lang: str,
+    durations: Optional[List[float]] = None,
+    *,
+    repair: bool = False,
+) -> str:
+    """Build user prompt with ±5 cue English context (Gemini-parity experiment)."""
+    batch_local_indices = [idx for group in batch_groups for idx in group]
+    total_cues = len(batch_local_indices)
+    first_idx = batch_local_indices[0]
+    last_idx = batch_local_indices[-1]
+
+    prev_start = max(0, first_idx - _CONTEXT_WINDOW)
+    previous_context = all_texts[prev_start:first_idx]
+    next_context = all_texts[last_idx + 1 : last_idx + 1 + _CONTEXT_WINDOW]
+
+    previous_lines = (
+        "\n".join(
+            f"- [{prev_start + offset + 1}] {line}"
+            for offset, line in enumerate(previous_context)
+        )
+        if previous_context
+        else "- (none)"
+    )
+    next_lines = (
+        "\n".join(
+            f"- [{last_idx + offset + 2}] {line}"
+            for offset, line in enumerate(next_context)
+        )
+        if next_context
+        else "- (none)"
+    )
+
+    current_lines: List[str] = []
+    for local_i, idx in enumerate(batch_local_indices, start=1):
+        parts = [f"[{local_i}] global_cue={idx + 1}"]
+        if durations is not None and idx < len(durations):
+            parts.append(f"duration={durations[idx]:.2f}s")
+        parts.append(f"EN: {all_texts[idx]}")
+        current_lines.append(" | ".join(parts))
+
+    prompt = (
+        f"Translate these {total_cues} English subtitle cues into natural {target_lang}.\n\n"
+        "Instructions:\n"
+        f"- Translate for Vietnamese short-form subtitles.\n"
+        "- Preserve the main meaning, not every English word.\n"
+        "- Use natural spoken Vietnamese.\n"
+        "- Keep text short enough for subtitles.\n"
+        "- Use neighboring cues to resolve pronouns, fragments, and unfinished clauses.\n"
+        "- Do not merge cues.\n"
+        "- Do not leave any non-empty source cue blank.\n"
+        "- Return exactly one Vietnamese text for each input cue.\n\n"
+        f"previous_context (up to {_CONTEXT_WINDOW} English cues before current batch):\n"
+        f"{previous_lines}\n\n"
+        "current_batch (translate ONLY these cues):\n"
+        + "\n".join(current_lines)
+        + f"\n\nnext_context (up to {_CONTEXT_WINDOW} English cues after current batch):\n"
+        f"{next_lines}\n\n"
+        "Output rules:\n"
+        f"- Return exactly {total_cues} objects in current_batch order\n"
+        '- JSON format: {"items": [{"index": 1, "text": "..."}, ...]}\n'
+        "- index must be 1..N matching current_batch order\n"
+        "- text must not be empty when the source EN cue is not empty"
+    )
+    if repair:
+        prompt += _REPAIR_USER_SUFFIX
+    return prompt
+
+
 def _build_grouped_user_prompt(
     batch_groups: List[List[int]],
     all_texts: List[str],
@@ -151,6 +274,58 @@ def _build_polish_user_prompt(segments: List[str]) -> str:
 # JSON response parser
 # ---------------------------------------------------------------------------
 
+def _parse_indexed_translations(content: str, expected_count: int) -> List[str]:
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+
+    data = json.loads(content)
+    items = data.get("items")
+    if items is None and isinstance(data, list):
+        items = data
+    if not isinstance(items, list):
+        raise ValueError("OpenAI response missing 'items' array")
+
+    if items and isinstance(items[0], str):
+        if len(items) != expected_count:
+            raise ValueError(f"Expected {expected_count} strings, got {len(items)}")
+        return [str(v).strip() for v in items]
+
+    if len(items) != expected_count:
+        raise ValueError(f"Expected {expected_count} items, got {len(items)}")
+
+    by_index: Dict[int, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Each translation item must be an object")
+        index = item.get("index")
+        text = str(item.get("text", item.get("text_vi", ""))).strip()
+        if not isinstance(index, int) or index < 1 or index > expected_count:
+            raise ValueError(f"Invalid item index {index}")
+        if index in by_index:
+            raise ValueError(f"Duplicate item index {index}")
+        by_index[index] = text
+
+    missing = [i for i in range(1, expected_count + 1) if i not in by_index]
+    if missing:
+        raise ValueError(f"Missing item indices: {missing}")
+    return [by_index[i] for i in range(1, expected_count + 1)]
+
+
+def _validate_translation_output(
+    translations: List[str],
+    source_texts: List[str],
+) -> None:
+    if len(translations) != len(source_texts):
+        raise ValueError(
+            f"Translation count mismatch: {len(translations)} vs {len(source_texts)}"
+        )
+    for i, (src, vi) in enumerate(zip(source_texts, translations), start=1):
+        if src.strip() and not vi.strip():
+            raise ValueError(f"Empty translation for non-empty source cue at position {i}")
+
+
 def _parse_json_strings(content: str, key: str, expected_count: int) -> List[str]:
     """
     Parse a JSON string returned by OpenAI and extract a string array.
@@ -186,33 +361,94 @@ def _call_openai_translate_grouped(
     all_texts: List[str],
     target_lang: str,
     topic: str,
+    durations: Optional[List[float]] = None,
+    *,
+    repair: bool = False,
 ) -> List[str]:
-    """
-    Translate a batch of phrase groups in a single OpenAI API call.
+    """Translate a batch with neighboring English context and indexed JSON output."""
+    batch_local_indices = [idx for g in batch_groups for idx in g]
+    source_segments = [all_texts[idx] for idx in batch_local_indices]
+    system_prompt = _build_openai_raw_system_prompt(topic)
+    user_prompt = _build_context_user_prompt(
+        batch_groups,
+        all_texts,
+        target_lang,
+        durations,
+        repair=repair,
+    )
 
-    Builds a grouped prompt that shows each group as a labelled block,
-    calls the model, and returns a flat list of translated strings in the
-    same order as the input cues across all groups.
-    """
-    total_cues = sum(len(g) for g in batch_groups)
+    dump_path = os.environ.get("OPENAI_CONTEXT_PROMPT_DUMP", "").strip()
+    if dump_path and not repair:
+        from pathlib import Path
+
+        Path(dump_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(dump_path).write_text(
+            f"=== SYSTEM ===\n{system_prompt}\n\n=== USER ===\n{user_prompt}",
+            encoding="utf-8",
+        )
+
     response = create_chat_completion(
         client,
         model,
         messages=[
-            {"role": "system", "content": build_system_prompt(topic)},
-            {
-                "role": "user",
-                "content": _build_grouped_user_prompt(batch_groups, all_texts, target_lang),
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
-        temperature=0.4,
+        temperature=0.35 if repair else 0.4,
         response_format={"type": "json_object"},
     )
-    return _parse_json_strings(
+    translations = _parse_indexed_translations(
         response.choices[0].message.content or "",
-        "translations",
-        total_cues,
+        len(source_segments),
     )
+    _validate_translation_output(translations, source_segments)
+    return translations
+
+
+def _translate_grouped_with_validation_retry(
+    client,
+    model: str,
+    batch_groups: List[List[int]],
+    all_texts: List[str],
+    target_lang: str,
+    topic: str,
+    durations: Optional[List[float]] = None,
+) -> List[str]:
+    batch_local_indices = [idx for g in batch_groups for idx in g]
+    source_segments = [all_texts[idx] for idx in batch_local_indices]
+
+    try:
+        return _call_openai_translate_grouped(
+            client,
+            model,
+            batch_groups,
+            all_texts,
+            target_lang,
+            topic,
+            durations,
+            repair=False,
+        )
+    except Exception as exc:
+        print(f"  [OpenAI translate] validation failed ({exc}), repair retry…")
+        try:
+            return _call_openai_translate_grouped(
+                client,
+                model,
+                batch_groups,
+                all_texts,
+                target_lang,
+                topic,
+                durations,
+                repair=True,
+            )
+        except Exception as exc2:
+            if len(source_segments) == 1:
+                print(
+                    f"  [OpenAI translate] repair failed ({exc2}), "
+                    "safe fallback (source EN for non-empty cue)"
+                )
+                return [src if src.strip() else "" for src in source_segments]
+            raise
 
 
 def _call_openai_translate(
@@ -221,8 +457,23 @@ def _call_openai_translate(
     segments: List[str],
     target_lang: str,
     topic: str,
+    all_texts: Optional[List[str]] = None,
+    durations: Optional[List[float]] = None,
+    local_indices: Optional[List[int]] = None,
 ) -> List[str]:
-    """Legacy single-cue-list translator used as a last-resort fallback."""
+    """Per-cue or small-list fallback using context-aware indexed JSON output."""
+    if all_texts is not None and local_indices is not None:
+        batch_groups = [[idx] for idx in local_indices]
+        return _translate_grouped_with_validation_retry(
+            client,
+            model,
+            batch_groups,
+            all_texts,
+            target_lang,
+            topic,
+            durations,
+        )
+
     lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
     n = len(segments)
     user_prompt = (
@@ -231,26 +482,28 @@ def _call_openai_translate(
         f"{target_lang} subtitles that Vietnamese viewers would actually read on screen.\n\n"
         "Read all lines together for context, then rewrite each line naturally. "
         "You may change sentence structure so Vietnamese flows smoothly. "
-        "Keep one output string per input line — same count, same order.\n\n"
+        "Keep one output string per input line — same count, same order.\n"
+        "Do not leave any non-empty source cue blank.\n\n"
         + "\n".join(lines)
-        + f'\n\nRespond with JSON: {{"translations": ["...", ...]}} '
-        f"containing exactly {n} strings in the same order."
+        + f'\n\nRespond with JSON: {{"items": [{{"index": 1, "text": "..."}}, ...]}} '
+        f"containing exactly {n} objects."
     )
     response = create_chat_completion(
         client,
         model,
         messages=[
-            {"role": "system", "content": build_system_prompt(topic)},
+            {"role": "system", "content": _build_openai_raw_system_prompt(topic)},
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.4,
         response_format={"type": "json_object"},
     )
-    return _parse_json_strings(
+    translations = _parse_indexed_translations(
         response.choices[0].message.content or "",
-        "translations",
         n,
     )
+    _validate_translation_output(translations, segments)
+    return translations
 
 
 def _call_openai_polish(
@@ -288,16 +541,23 @@ def _translate_batch_with_retry(
     all_texts: List[str],
     target_lang: str,
     topic: str,
+    durations: Optional[List[float]] = None,
 ) -> List[str]:
     """
     Translate a batch of groups with cascading retry:
-      1. Try the full batch in one call.
+      1. Try the full batch with context + validation repair.
       2. On failure, retry each group individually.
-      3. On a single-group failure, fall back to per-cue legacy translation.
+      3. On a single-group failure, fall back to per-cue translation.
     """
     try:
-        return _call_openai_translate_grouped(
-            client, model, batch_groups, all_texts, target_lang, topic
+        return _translate_grouped_with_validation_retry(
+            client,
+            model,
+            batch_groups,
+            all_texts,
+            target_lang,
+            topic,
+            durations,
         )
     except Exception as exc:
         print(f"  Batch failed ({exc}), retrying group-by-group…")
@@ -305,20 +565,34 @@ def _translate_batch_with_retry(
     results: List[str] = []
     for group in batch_groups:
         try:
-            group_results = _call_openai_translate_grouped(
-                client, model, [group], all_texts, target_lang, topic
+            group_results = _translate_grouped_with_validation_retry(
+                client,
+                model,
+                [group],
+                all_texts,
+                target_lang,
+                topic,
+                durations,
             )
             results.extend(group_results)
         except Exception as exc2:
             print(f"  Group failed ({exc2}), falling back to per-cue…")
             for local_idx in group:
+                src = all_texts[local_idx]
                 try:
                     per_cue = _call_openai_translate(
-                        client, model, [all_texts[local_idx]], target_lang, topic
+                        client,
+                        model,
+                        [src],
+                        target_lang,
+                        topic,
+                        all_texts=all_texts,
+                        durations=durations,
+                        local_indices=[local_idx],
                     )
                     results.extend(per_cue)
                 except Exception:
-                    results.append(all_texts[local_idx])  # keep English on total failure
+                    results.append(src)
 
     return results
 
@@ -503,12 +777,16 @@ def translate_srt_entries_openai(
 
     batches = _pack_groups_into_batches(groups, batch_size)
 
+    entry_durations = [
+        _parse_ts(e["end_str"]) - _parse_ts(e["start_str"]) for e in entries
+    ]
+    non_empty_durations = [entry_durations[i] for i in non_empty_indices]
+
     # -----------------------------------------------------------------------
     # Translation loop
     # -----------------------------------------------------------------------
     translated_non_empty: Dict[int, str] = {}
 
-    local_offset = 0
     for batch_groups in batches:
         batch_local_indices = [idx for g in batch_groups for idx in g]
         first_cue = batch_local_indices[0] + 1
@@ -520,20 +798,32 @@ def translate_srt_entries_openai(
         )
 
         results = _translate_batch_with_retry(
-            client, model, batch_groups, non_empty_texts, target_lang, topic
+            client,
+            model,
+            batch_groups,
+            non_empty_texts,
+            target_lang,
+            topic,
+            non_empty_durations,
         )
 
         for local_idx, vi_text in zip(batch_local_indices, results):
             translated_non_empty[local_idx] = vi_text
-
-        local_offset += len(batch_local_indices)
 
     # -----------------------------------------------------------------------
     # Reconstruct full translated_texts list (entry-indexed)
     # -----------------------------------------------------------------------
     translated_texts = list(all_entry_texts)
     for local_idx, orig_entry_idx in enumerate(non_empty_indices):
-        translated_texts[orig_entry_idx] = translated_non_empty.get(local_idx, "")
+        src = non_empty_texts[local_idx]
+        vi_text = translated_non_empty.get(local_idx, "").strip()
+        if src.strip() and not vi_text:
+            vi_text = src
+            print(
+                f"  [OpenAI translate] cue {orig_entry_idx + 1} empty after batch; "
+                f"fallback to source EN"
+            )
+        translated_texts[orig_entry_idx] = vi_text
 
     _log_translation_examples(groups, non_empty_texts, non_empty_indices, translated_texts)
 

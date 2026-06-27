@@ -21,6 +21,42 @@ OPENAI_CHAT_MODELS = (
 
 DEFAULT_OPENAI_MODEL = "gpt-5.5-2026-04-23"
 DEFAULT_TRANSLATION_BATCH_SIZE = 30
+DEFAULT_TRANSLATION_ENGINE = "openai"
+SUPPORTED_TRANSLATION_ENGINES = ("openai", "gemini")
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+
+DEFAULT_VI_EDITOR_BATCH_SIZE = 30
+DEFAULT_VI_EDITOR_CONTEXT_WINDOW = 5
+DEFAULT_VI_EDITOR_TEMPERATURE = 0.3
+VI_EDITOR_ENABLED = True
+VI_EDITOR_PROVIDER = "auto"
+VI_EDITOR_SAVE_DEBUG = True
+EN_DOMAIN_CORRECTION_ENABLED = True
+EN_DOMAIN_CORRECTION_MODE = "rules"
+EN_DOMAIN_CORRECTION_SAVE_DEBUG = True
+
+# Vietnamese subtitle compression (after editor, before readability).
+VI_COMPRESSION_ENABLED = True
+VI_COMPRESSION_FAST_MAX_DURATION = 0.8
+VI_COMPRESSION_FAST_MAX_WORDS = 6
+VI_COMPRESSION_MEDIUM_MAX_DURATION = 1.5
+VI_COMPRESSION_MEDIUM_MAX_WORDS = 10
+VI_COMPRESSION_TRIGGER_CPS = 22.0
+VI_COMPRESSION_MAX_CPS = 24.0
+VI_COMPRESSION_MIN_SHORTEN_RATIO = 0.12
+
+# Multi-cue Vietnamese flow (after compression, before timing).
+VI_FLOW_ENABLED = True
+VI_FLOW_MIN_GROUP_SIZE = 2
+VI_FLOW_MAX_GROUP_SIZE = 4
+VI_FLOW_MAX_CHAR_INCREASE_RATIO = 0.10
+VI_FLOW_MAX_CPS = 28.0
+VI_FLOW_TINY_FRAGMENT_CHARS = 8
+VI_FLOW_SAVE_DEBUG = True
+
+# Final timing normalization (remove cue overlaps after timing optimizer).
+TIMING_NORMALIZE_MIN_GAP = 0.05
+TIMING_NORMALIZE_MIN_DURATION = 0.45
 
 # Maximum consecutive cues per phrase group sent to GPT.
 # Smaller = more groups (more API calls), larger = more context per call.
@@ -49,6 +85,22 @@ def get_translation_batch_size() -> int:
     return max(1, min(value, 50))
 
 
+def get_translation_engine() -> str:
+    load_env()
+    raw = (os.getenv("TRANSLATION_ENGINE") or DEFAULT_TRANSLATION_ENGINE).strip().lower()
+    if raw not in SUPPORTED_TRANSLATION_ENGINES:
+        valid = ", ".join(SUPPORTED_TRANSLATION_ENGINES)
+        raise ValueError(
+            f"Unsupported TRANSLATION_ENGINE '{raw}'. Choose one of: {valid}"
+        )
+    return raw
+
+
+def get_gemini_model() -> str:
+    load_env()
+    return (os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL).strip()
+
+
 def get_phrase_group_max_cues() -> int:
     load_env()
     value = int(os.getenv("PHRASE_GROUP_MAX_CUES", str(DEFAULT_MAX_CUES_PER_GROUP)))
@@ -56,6 +108,65 @@ def get_phrase_group_max_cues() -> int:
 
 
 def translation_polish_enabled() -> bool:
-    load_env()
-    raw = (os.getenv("OPENAI_TRANSLATION_POLISH") or "true").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    """OpenAI inline polish is replaced by the shared VI editor pass."""
+    return False
+
+
+def vi_editor_enabled() -> bool:
+    return VI_EDITOR_ENABLED
+
+
+def get_vi_editor_provider() -> str:
+    return VI_EDITOR_PROVIDER
+
+
+def resolve_vi_editor_provider(translation_engine: str) -> str:
+    if VI_EDITOR_PROVIDER == "auto":
+        return translation_engine
+    return VI_EDITOR_PROVIDER
+
+
+def get_vi_editor_model() -> str:
+    return "auto"
+
+
+def resolve_vi_editor_model(provider: str) -> str:
+    if provider == "openai":
+        return get_openai_model()
+    return get_gemini_model()
+
+
+def get_vi_editor_batch_size() -> int:
+    return DEFAULT_VI_EDITOR_BATCH_SIZE
+
+
+def get_vi_editor_context_window() -> int:
+    return DEFAULT_VI_EDITOR_CONTEXT_WINDOW
+
+
+def get_vi_editor_temperature() -> float:
+    return DEFAULT_VI_EDITOR_TEMPERATURE
+
+
+def vi_editor_save_debug() -> bool:
+    return VI_EDITOR_SAVE_DEBUG
+
+
+def en_domain_correction_enabled() -> bool:
+    return EN_DOMAIN_CORRECTION_ENABLED
+
+
+def en_domain_correction_mode() -> str:
+    return EN_DOMAIN_CORRECTION_MODE
+
+
+def en_domain_correction_save_debug() -> bool:
+    return EN_DOMAIN_CORRECTION_SAVE_DEBUG
+
+
+def vi_compression_enabled() -> bool:
+    return VI_COMPRESSION_ENABLED
+
+
+def vi_flow_enabled() -> bool:
+    return VI_FLOW_ENABLED

@@ -359,3 +359,131 @@ def optimize_srt_timing_file(
     with open(output_srt_path, "w", encoding="utf-8") as f:
         write_srt_entries(optimized, file=f)
     return output_srt_path
+
+
+# ---------------------------------------------------------------------------
+# Final overlap normalization (post timing optimizer)
+# ---------------------------------------------------------------------------
+
+def _count_overlaps(
+    starts: List[float],
+    ends: List[float],
+    min_gap: float,
+) -> int:
+    count = 0
+    for i in range(len(starts) - 1):
+        if ends[i] > starts[i + 1] - min_gap + 1e-6:
+            count += 1
+    return count
+
+
+def normalize_timing_entries(
+    entries: List[dict],
+    *,
+    min_gap: Optional[float] = None,
+    min_duration: Optional[float] = None,
+) -> List[dict]:
+    """
+    Remove overlaps between adjacent cues by shortening earlier cue end times.
+
+    Text and cue count are never changed. Start times are not modified.
+    """
+    from .config import TIMING_NORMALIZE_MIN_DURATION, TIMING_NORMALIZE_MIN_GAP
+
+    min_gap = TIMING_NORMALIZE_MIN_GAP if min_gap is None else min_gap
+    min_duration = TIMING_NORMALIZE_MIN_DURATION if min_duration is None else min_duration
+
+    n = len(entries)
+    if n == 0:
+        return entries
+
+    starts = [_parse_ts(e["start_str"]) for e in entries]
+    ends = [_parse_ts(e["end_str"]) for e in entries]
+    new_ends = list(ends)
+    adjusted = 0
+
+    for i in range(n - 1):
+        start_i = starts[i]
+        end_i = new_ends[i]
+        start_next = starts[i + 1]
+        max_end = start_next - min_gap
+
+        if end_i <= max_end + 1e-6:
+            continue
+
+        candidate_end = max_end
+        candidate_dur = candidate_end - start_i
+
+        if candidate_dur >= min_duration:
+            new_end = candidate_end
+        else:
+            # Gap too tight for min_duration — prioritize zero overlap.
+            new_end = max(start_i, candidate_end)
+
+        if abs(new_end - end_i) > 1e-6:
+            adjusted += 1
+            print(
+                f"  [Timing Normalize] cue {i + 1} | "
+                f"old_start={start_i:.3f} old_end={end_i:.3f} | "
+                f"new_start={start_i:.3f} new_end={new_end:.3f}"
+            )
+            new_ends[i] = new_end
+
+    overlaps_before = _count_overlaps(starts, ends, min_gap)
+    overlaps_after = _count_overlaps(starts, new_ends, min_gap)
+    print(
+        f"\n[Timing Normalize] total={n} | adjusted={adjusted} "
+        f"| overlaps {overlaps_before}→{overlaps_after} "
+        f"| min_gap={min_gap:.2f}s min_duration={min_duration:.2f}s"
+    )
+
+    result = []
+    for i, entry in enumerate(entries):
+        new_entry = dict(entry)
+        new_entry["end_str"] = _format_ts(new_ends[i])
+        result.append(new_entry)
+    return result
+
+
+def normalize_final_srt_timing(
+    input_srt_path: str,
+    output_srt_path: Optional[str] = None,
+    *,
+    min_gap: Optional[float] = None,
+    min_duration: Optional[float] = None,
+) -> str:
+    """
+    Remove adjacent cue overlaps in a finalized SRT file.
+
+    If *output_srt_path* is ``None``, replaces *input_srt_path* in place.
+    """
+    from .utils import parse_srt, write_srt_entries
+
+    with open(input_srt_path, encoding="utf-8") as f:
+        entries = parse_srt(f.read())
+
+    normalized = normalize_timing_entries(
+        entries,
+        min_gap=min_gap,
+        min_duration=min_duration,
+    )
+
+    in_place = output_srt_path is None
+    if in_place:
+        srt_dir = os.path.dirname(os.path.abspath(input_srt_path))
+        fd, tmp_path = tempfile.mkstemp(suffix=".srt", dir=srt_dir)
+        os.close(fd)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                write_srt_entries(normalized, file=f)
+            os.replace(tmp_path, input_srt_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+        return input_srt_path
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_srt_path)), exist_ok=True)
+    with open(output_srt_path, "w", encoding="utf-8") as f:
+        write_srt_entries(normalized, file=f)
+    return output_srt_path

@@ -500,6 +500,9 @@ def translate_srt_entries(
     source_lang: str = "en",
     engine: str = "openai",
     topic: Optional[str] = None,
+    translation_context: Optional[dict] = None,
+    *,
+    strict_cue_count: bool = False,
 ) -> List[dict]:
     engine = (engine or "openai").strip().lower()
 
@@ -507,13 +510,21 @@ def translate_srt_entries(
         from .openai_translate import translate_srt_entries_openai
 
         return translate_srt_entries_openai(
-            entries, target_lang=target_lang, topic=topic
+            entries,
+            target_lang=target_lang,
+            topic=topic,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
         )
     if engine == "gemini":
         from .gemini_translate import translate_srt_entries_gemini
 
         return translate_srt_entries_gemini(
-            entries, target_lang=target_lang, topic=topic
+            entries,
+            target_lang=target_lang,
+            topic=topic,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
         )
 
     raise ValueError(f"Unsupported translation engine: {engine}")

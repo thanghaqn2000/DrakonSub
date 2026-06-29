@@ -21,8 +21,10 @@ from .config import (
     load_env,
     resolve_vi_editor_model,
     resolve_vi_editor_provider,
+    vi_editor_openai_few_shot_enabled,
     vi_editor_save_debug,
 )
+from .translation_prompt_context import enrich_user_prompt
 from .gemini_translate import (
     GeminiNonRetryableError,
     _call_gemini_json,
@@ -190,7 +192,7 @@ GOOD VI tài sản tạo ra giá trị / và thứ chỉ chờ người sau / mu
 
 
 def _resolve_editor_system_prompt(provider: str) -> str:
-    if provider == "openai":
+    if provider == "openai" and vi_editor_openai_few_shot_enabled():
         return VI_EDITOR_SYSTEM_PROMPT + "\n\n" + VI_EDITOR_OPENAI_REWRITE_BLOCK
     return VI_EDITOR_SYSTEM_PROMPT
 
@@ -240,6 +242,7 @@ def _build_editor_user_prompt(
     source_texts: List[str],
     vi_texts: List[str],
     context_window: int,
+    translation_context: Optional[dict] = None,
 ) -> str:
     first = batch_indices[0]
     last = batch_indices[-1]
@@ -253,7 +256,7 @@ def _build_editor_user_prompt(
         current_lines.append(f"[{local_i}] EN: {source_texts[idx]}")
         current_lines.append(f"    VI: {vi_texts[idx]}")
 
-    return (
+    base = (
         "Use previous_context and next_context to understand meaning, jokes, and ideas "
         "that span multiple cues.\n"
         "Edit ONLY current_batch. Rewrite stiff raw lines into natural spoken Vietnamese.\n\n"
@@ -287,6 +290,19 @@ def _build_editor_user_prompt(
         "- index must be 1..N matching current_batch order\n"
         "- text_vi must not be empty unless the raw VI cue was empty"
     )
+    if translation_context and translation_context.get("video_context"):
+        batch_1based = [i + 1 for i in batch_indices]
+        source_1based = translation_context.get("source_texts_1based") or {
+            i + 1: source_texts[i] for i in range(len(source_texts))
+        }
+        base = enrich_user_prompt(
+            base,
+            video_context=translation_context.get("video_context"),
+            meaning_units=translation_context.get("meaning_units"),
+            batch_cue_indexes_1based=batch_1based,
+            source_texts_1based=source_1based,
+        )
+    return base
 
 
 def _parse_editor_response(content: str, expected_count: int) -> List[str]:
@@ -370,9 +386,10 @@ def _call_editor_batch(
     temperature: float,
     debug_dir: Optional[str],
     batch_tag: str,
+    translation_context: Optional[dict] = None,
 ) -> Tuple[List[str], Dict]:
     user_prompt = _build_editor_user_prompt(
-        batch_indices, source_texts, vi_texts, context_window
+        batch_indices, source_texts, vi_texts, context_window, translation_context
     )
     expected = len(batch_indices)
     system_prompt = _resolve_editor_system_prompt(provider)
@@ -403,7 +420,7 @@ def _call_editor_batch(
         content, usage = _call_gemini_json(
             api_key=api_key,
             model=model,
-            system_prompt=VI_EDITOR_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
         )
@@ -474,6 +491,7 @@ def _edit_batch_with_retry(
     debug_dir: Optional[str],
     batch_tag: str,
     max_retries: int = 1,
+    translation_context: Optional[dict] = None,
 ) -> Tuple[List[str], Dict]:
     attempts = 0
     last_usage: Dict = {}
@@ -489,6 +507,7 @@ def _edit_batch_with_retry(
                 temperature=temperature,
                 debug_dir=debug_dir,
                 batch_tag=batch_tag if attempts == 0 else f"{batch_tag}_retry{attempts}",
+                translation_context=translation_context,
             )
             return result, {
                 "retry_count": attempts,
@@ -526,6 +545,7 @@ def _edit_batch_with_retry(
         debug_dir=debug_dir,
         batch_tag=f"{batch_tag}_L",
         max_retries=max_retries,
+        translation_context=translation_context,
     )
     right_texts, right_stats = _edit_batch_with_retry(
         provider=provider,
@@ -538,6 +558,7 @@ def _edit_batch_with_retry(
         debug_dir=debug_dir,
         batch_tag=f"{batch_tag}_R",
         max_retries=max_retries,
+        translation_context=translation_context,
     )
     return left_texts + right_texts, {
         "retry_count": left_stats.get("retry_count", 0) + right_stats.get("retry_count", 0),
@@ -554,6 +575,7 @@ def edit_vi_srt_entries(
     topic: Optional[str] = None,
     on_progress=None,
     debug_dir: Optional[str] = None,
+    translation_context: Optional[dict] = None,
 ) -> List[dict]:
     """
     Polish raw Vietnamese subtitle entries using English source context.
@@ -613,6 +635,7 @@ def edit_vi_srt_entries(
                 temperature=temperature,
                 debug_dir=debug_dir,
                 batch_tag=batch_tag,
+                translation_context=translation_context,
             )
             _log_batch_metrics(
                 provider=provider,
@@ -667,6 +690,7 @@ def edit_vi_srt_file(
         topic=topic,
         on_progress=on_progress,
         debug_dir=debug_dir,
+        translation_context=translation_context,
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(output_srt_path)), exist_ok=True)

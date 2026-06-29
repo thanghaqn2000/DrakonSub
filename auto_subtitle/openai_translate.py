@@ -11,6 +11,7 @@ from .config import (
 )
 from .translation_topics import TOPICS, build_polish_system_prompt, build_system_prompt, normalize_topic
 from .openai_chat import create_chat_completion
+from .translation_prompt_context import enrich_user_prompt
 
 # Punctuation that signals the end of a sentence / phrase group.
 _SENTENCE_END_CHARS = frozenset(".!?…")
@@ -45,6 +46,12 @@ _REPAIR_USER_SUFFIX = (
     "\n\nREPAIR MODE: Your previous response failed validation "
     "(wrong count, missing index, or empty text for a non-empty source cue). "
     "Return exactly one non-empty Vietnamese subtitle for every non-empty source cue."
+)
+
+_STRICT_CUE_COUNT_SUFFIX = (
+    "\n\nSTRICT CUE COUNT MODE: The output must contain exactly the same number "
+    "of cues as the input. Return one Vietnamese subtitle per input cue index. "
+    "Do not merge, split, skip, or drop any cue."
 )
 
 
@@ -82,6 +89,9 @@ def _group_cues_by_sentence(
         groups.append(current)
 
     return groups
+
+
+from .meaning_unit_builder import resolve_translation_groups
 
 
 def _pack_groups_into_batches(
@@ -145,6 +155,9 @@ def _build_context_user_prompt(
     durations: Optional[List[float]] = None,
     *,
     repair: bool = False,
+    strict: bool = False,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
 ) -> str:
     """Build user prompt with ±5 cue English context (Gemini-parity experiment)."""
     batch_local_indices = [idx for group in batch_groups for idx in group]
@@ -206,6 +219,28 @@ def _build_context_user_prompt(
     )
     if repair:
         prompt += _REPAIR_USER_SUFFIX
+    if strict:
+        prompt += _STRICT_CUE_COUNT_SUFFIX
+
+    ctx = translation_context or {}
+    if ctx.get("video_context"):
+        batch_local = [idx for g in batch_groups for idx in g]
+        batch_1based = (
+            [non_empty_indices[i] + 1 for i in batch_local]
+            if non_empty_indices
+            else [i + 1 for i in batch_local]
+        )
+        source_1based = ctx.get("source_texts_1based") or {
+            (non_empty_indices[i] + 1 if non_empty_indices else i + 1): all_texts[i]
+            for i in range(len(all_texts))
+        }
+        prompt = enrich_user_prompt(
+            prompt,
+            video_context=ctx.get("video_context"),
+            meaning_units=ctx.get("meaning_units"),
+            batch_cue_indexes_1based=batch_1based,
+            source_texts_1based=source_1based,
+        )
     return prompt
 
 
@@ -364,6 +399,9 @@ def _call_openai_translate_grouped(
     durations: Optional[List[float]] = None,
     *,
     repair: bool = False,
+    strict: bool = False,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
 ) -> List[str]:
     """Translate a batch with neighboring English context and indexed JSON output."""
     batch_local_indices = [idx for g in batch_groups for idx in g]
@@ -375,6 +413,9 @@ def _call_openai_translate_grouped(
         target_lang,
         durations,
         repair=repair,
+        strict=strict,
+        translation_context=translation_context,
+        non_empty_indices=non_empty_indices,
     )
 
     dump_path = os.environ.get("OPENAI_CONTEXT_PROMPT_DUMP", "").strip()
@@ -413,6 +454,10 @@ def _translate_grouped_with_validation_retry(
     target_lang: str,
     topic: str,
     durations: Optional[List[float]] = None,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
+    *,
+    strict_cue_count: bool = False,
 ) -> List[str]:
     batch_local_indices = [idx for g in batch_groups for idx in g]
     source_segments = [all_texts[idx] for idx in batch_local_indices]
@@ -427,6 +472,9 @@ def _translate_grouped_with_validation_retry(
             topic,
             durations,
             repair=False,
+            strict=strict_cue_count,
+            translation_context=translation_context,
+            non_empty_indices=non_empty_indices,
         )
     except Exception as exc:
         print(f"  [OpenAI translate] validation failed ({exc}), repair retry…")
@@ -440,6 +488,8 @@ def _translate_grouped_with_validation_retry(
                 topic,
                 durations,
                 repair=True,
+                translation_context=translation_context,
+                non_empty_indices=non_empty_indices,
             )
         except Exception as exc2:
             if len(source_segments) == 1:
@@ -472,6 +522,9 @@ def _call_openai_translate(
             target_lang,
             topic,
             durations,
+            translation_context,
+            non_empty_indices,
+            strict_cue_count=strict_cue_count,
         )
 
     lines = [f"[{i + 1}] {text}" for i, text in enumerate(segments)]
@@ -542,6 +595,10 @@ def _translate_batch_with_retry(
     target_lang: str,
     topic: str,
     durations: Optional[List[float]] = None,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
+    *,
+    strict_cue_count: bool = False,
 ) -> List[str]:
     """
     Translate a batch of groups with cascading retry:
@@ -558,6 +615,9 @@ def _translate_batch_with_retry(
             target_lang,
             topic,
             durations,
+            translation_context,
+            non_empty_indices,
+            strict_cue_count=strict_cue_count,
         )
     except Exception as exc:
         print(f"  Batch failed ({exc}), retrying group-by-group…")
@@ -742,6 +802,9 @@ def translate_srt_entries_openai(
     batch_size: Optional[int] = None,
     topic: Optional[str] = None,
     polish: Optional[bool] = None,
+    translation_context: Optional[dict] = None,
+    *,
+    strict_cue_count: bool = False,
 ) -> List[dict]:
     from openai import OpenAI
 
@@ -769,10 +832,24 @@ def translate_srt_entries_openai(
     if not non_empty_texts:
         return list(entries)
 
+    if translation_context is not None:
+        translation_context = {
+            **translation_context,
+            "source_texts_1based": {
+                i + 1: e.get("text", "").strip() for i, e in enumerate(entries)
+            },
+        }
+
     # -----------------------------------------------------------------------
-    # Phrase grouping + batching
+    # Phrase / meaning-unit grouping + batching
     # -----------------------------------------------------------------------
-    groups = _group_cues_by_sentence(non_empty_texts, max_cues_per_group=max_cues_per_group)
+    groups = resolve_translation_groups(
+        non_empty_texts,
+        non_empty_indices,
+        max_cues_per_group,
+        translation_context,
+        _group_cues_by_sentence,
+    )
     _log_grouping_stats(groups, non_empty_texts)
 
     batches = _pack_groups_into_batches(groups, batch_size)
@@ -805,6 +882,9 @@ def translate_srt_entries_openai(
             target_lang,
             topic,
             non_empty_durations,
+            translation_context,
+            non_empty_indices,
+            strict_cue_count=strict_cue_count,
         )
 
         for local_idx, vi_text in zip(batch_local_indices, results):

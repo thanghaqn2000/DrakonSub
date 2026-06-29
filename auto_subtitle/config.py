@@ -58,6 +58,13 @@ VI_FLOW_SAVE_DEBUG = True
 TIMING_NORMALIZE_MIN_GAP = 0.05
 TIMING_NORMALIZE_MIN_DURATION = 0.45
 
+# General translation intelligence (context, meaning units, QA, repair).
+TRANSLATION_INTELLIGENCE_ENABLED = True
+TRANSLATION_INTELLIGENCE_SAVE_DEBUG = True
+
+# Sample-specific OpenAI editor few-shots from prior experiments — off in production.
+VI_EDITOR_OPENAI_FEW_SHOT_ENABLED = False
+
 # Maximum consecutive cues per phrase group sent to GPT.
 # Smaller = more groups (more API calls), larger = more context per call.
 DEFAULT_MAX_CUES_PER_GROUP = 6
@@ -170,3 +177,15 @@ def vi_compression_enabled() -> bool:
 
 def vi_flow_enabled() -> bool:
     return VI_FLOW_ENABLED
+
+
+def translation_intelligence_enabled() -> bool:
+    return TRANSLATION_INTELLIGENCE_ENABLED
+
+
+def translation_intelligence_save_debug() -> bool:
+    return TRANSLATION_INTELLIGENCE_SAVE_DEBUG
+
+
+def vi_editor_openai_few_shot_enabled() -> bool:
+    return VI_EDITOR_OPENAI_FEW_SHOT_ENABLED

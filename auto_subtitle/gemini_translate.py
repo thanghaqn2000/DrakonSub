@@ -11,6 +11,8 @@ from .config import (
     get_phrase_group_max_cues,
     get_translation_batch_size,
 )
+from .meaning_unit_builder import resolve_translation_groups
+from .translation_prompt_context import enrich_user_prompt
 from .translation_topics import TOPICS, normalize_topic
 
 # Punctuation that signals the end of a sentence / phrase group.
@@ -159,6 +161,8 @@ def _build_grouped_user_prompt(
     batch_groups: List[List[int]],
     all_texts: List[str],
     target_lang: str,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
 ) -> str:
     batch_local_indices = [idx for group in batch_groups for idx in group]
     total_cues = len(batch_local_indices)
@@ -183,7 +187,7 @@ def _build_grouped_user_prompt(
         else "- (none)"
     )
 
-    return (
+    base = (
         "Use context sections below to understand meaning.\n\n"
         "previous_context (up to 5 lines before current batch):\n"
         f"{previous_lines}\n\n"
@@ -199,6 +203,25 @@ def _build_grouped_user_prompt(
         '- Return JSON only in this format: {"translations": ["...", "..."]}\n'
         f"- translations must contain exactly {total_cues} strings"
     )
+    if translation_context and translation_context.get("video_context"):
+        batch_local = batch_local_indices
+        batch_1based = (
+            [non_empty_indices[i] + 1 for i in batch_local]
+            if non_empty_indices
+            else [i + 1 for i in batch_local]
+        )
+        source_1based = translation_context.get("source_texts_1based") or {
+            (non_empty_indices[i] + 1 if non_empty_indices else i + 1): all_texts[i]
+            for i in range(len(all_texts))
+        }
+        base = enrich_user_prompt(
+            base,
+            video_context=translation_context.get("video_context"),
+            meaning_units=translation_context.get("meaning_units"),
+            batch_cue_indexes_1based=batch_1based,
+            source_texts_1based=source_1based,
+        )
+    return base
 
 
 def _build_gemini_system_prompt(topic: str) -> str:
@@ -302,13 +325,21 @@ def _call_gemini_translate_grouped(
     all_texts: List[str],
     target_lang: str,
     topic: str,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
 ) -> Tuple[List[str], Dict]:
     total_cues = sum(len(g) for g in batch_groups)
     content, usage = _call_gemini_json(
         api_key=api_key,
         model=model,
         system_prompt=_build_gemini_system_prompt(topic),
-        user_prompt=_build_grouped_user_prompt(batch_groups, all_texts, target_lang),
+        user_prompt=_build_grouped_user_prompt(
+            batch_groups,
+            all_texts,
+            target_lang,
+            translation_context,
+            non_empty_indices,
+        ),
         temperature=0.4,
     )
     return _parse_json_strings(content, "translations", total_cues), usage
@@ -322,13 +353,22 @@ def _translate_batch_with_retry(
     target_lang: str,
     topic: str,
     max_retries: int = 2,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
 ) -> Tuple[List[str], Dict]:
     attempts = 0
     last_usage: Dict = {}
     while attempts <= max_retries:
         try:
             result, usage = _call_gemini_translate_grouped(
-                api_key, model, batch_groups, all_texts, target_lang, topic
+                api_key,
+                model,
+                batch_groups,
+                all_texts,
+                target_lang,
+                topic,
+                translation_context,
+                non_empty_indices,
             )
             return result, {
                 "retry_count": attempts,
@@ -351,7 +391,14 @@ def _translate_batch_with_retry(
         while group_attempt <= max_retries:
             try:
                 group_result, usage = _call_gemini_translate_grouped(
-                    api_key, model, [group], all_texts, target_lang, topic
+                    api_key,
+                    model,
+                    [group],
+                    all_texts,
+                    target_lang,
+                    topic,
+                    translation_context,
+                    non_empty_indices,
                 )
                 results.extend(group_result)
                 last_usage = usage
@@ -406,6 +453,9 @@ def translate_srt_entries_gemini(
     batch_size: Optional[int] = None,
     topic: Optional[str] = None,
     on_progress=None,
+    translation_context: Optional[dict] = None,
+    *,
+    strict_cue_count: bool = False,
 ) -> List[dict]:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -426,9 +476,20 @@ def translate_srt_entries_gemini(
     if not non_empty_texts:
         return list(entries)
 
-    groups = _group_cues_by_sentence(
+    if translation_context is not None:
+        translation_context = {
+            **translation_context,
+            "source_texts_1based": {
+                i + 1: e.get("text", "").strip() for i, e in enumerate(entries)
+            },
+        }
+
+    groups = resolve_translation_groups(
         non_empty_texts,
-        max_cues_per_group=max_cues_per_group,
+        non_empty_indices,
+        max_cues_per_group,
+        translation_context,
+        _group_cues_by_sentence,
     )
     batches = _pack_groups_into_batches(groups, batch_size)
 
@@ -450,6 +511,8 @@ def translate_srt_entries_gemini(
             all_texts=non_empty_texts,
             target_lang=target_lang,
             topic=topic,
+            translation_context=translation_context,
+            non_empty_indices=non_empty_indices,
         )
         _log_batch_metrics(
             model=model,

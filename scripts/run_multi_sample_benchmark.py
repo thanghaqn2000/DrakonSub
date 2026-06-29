@@ -54,7 +54,7 @@ def _sample_result(debug_dir: Path) -> Dict[str, Any]:
         cps = json.loads(cps_path.read_text(encoding="utf-8"))
 
     pre_timing = quality.get("pre_timing_after_repair") or {}
-    return {
+    base: Dict[str, Any] = {
         "pipeline_contract_status": contract.get("pipeline_contract_status"),
         "post_final_repair_text_lock_status": contract.get(
             "post_final_repair_text_lock_status"
@@ -78,6 +78,34 @@ def _sample_result(debug_dir: Path) -> Dict[str, Any]:
         "cps_error_count_post_timing": cps.get("cps_error_count_post_timing"),
         "human_review_needed": quality.get("human_review_needed", False),
     }
+    shift_path = debug_dir / "cue_shift_repair_report.json"
+    shift_diag_path = debug_dir / "cue_shift_diagnosis_sample.json"
+    if shift_diag_path.exists():
+        shift_diag = json.loads(shift_diag_path.read_text(encoding="utf-8"))
+        base.update(
+            {
+                "local_cue_shift_windows_detected": shift_diag.get(
+                    "local_cue_shift_windows_detected",
+                    len(shift_diag.get("shift_windows") or []),
+                ),
+                "local_cue_shift_windows_repaired": shift_diag.get(
+                    "local_cue_shift_windows_repaired", 0
+                ),
+                "window_repairs_accepted": shift_diag.get("window_repairs_accepted", 0),
+                "window_repairs_rejected": shift_diag.get("window_repairs_rejected", 0),
+            }
+        )
+    elif shift_path.exists():
+        shift_rep = json.loads(shift_path.read_text(encoding="utf-8"))
+        base.update(
+            {
+                "local_cue_shift_windows_detected": shift_rep.get("windows_detected", 0),
+                "local_cue_shift_windows_repaired": shift_rep.get("windows_requested", 0),
+                "window_repairs_accepted": shift_rep.get("window_repairs_accepted", 0),
+                "window_repairs_rejected": shift_rep.get("window_repairs_rejected", 0),
+            }
+        )
+    return base
 
 
 def _prepare_sample_debug(
@@ -256,6 +284,10 @@ def main() -> int:
     diag_script = ROOT / "scripts" / "build_cross_sample_diagnosis.py"
     if diag_script.exists():
         subprocess.run([sys.executable, str(diag_script)], check=False, cwd=str(ROOT))
+
+    shift_script = ROOT / "scripts" / "build_cue_shift_diagnosis.py"
+    if shift_script.exists():
+        subprocess.run([sys.executable, str(shift_script)], check=False, cwd=str(ROOT))
 
     print(f"\n[Benchmark] Done → {report_path}")
     return 0 if all(r.get("status") == "ok" for r in results) else 1

@@ -18,6 +18,8 @@ from .cps_diagnosis import (
     save_cps_diagnosis_report,
 )
 from .repair_unit_selector import select_units_for_repair
+from .cue_shift_detector import detect_local_shift_windows, diagnose_sample
+from .cue_shift_repair import repair_cue_shift_windows
 from .unit_repair_redistributor import (
     apply_unit_rewrite_repairs,
     parse_unit_rewrite_response,
@@ -486,6 +488,57 @@ def run_post_translation_qa(
     repaired, repair_meta = repair_risky_units(
         source_entries, vi_entries, intel_ctx, report_before, debug_dir=str(out)
     )
+
+    shift_windows = detect_local_shift_windows(
+        source_entries,
+        repaired,
+        intel_ctx.meaning_units,
+        intel_ctx.video_context,
+    )
+    shift_diagnosis = diagnose_sample(
+        "job",
+        source_entries,
+        repaired,
+        intel_ctx.meaning_units,
+        intel_ctx.video_context,
+    )
+    shift_diagnosis["shift_windows"] = shift_windows
+    _save_json(out / "cue_shift_diagnosis_sample.json", shift_diagnosis)
+
+    if shift_windows:
+        print(
+            f"[Translation Intelligence] Cue-shift window repair for "
+            f"{len(shift_windows)} window(s)…"
+        )
+        repaired, shift_meta = repair_cue_shift_windows(
+            source_entries,
+            repaired,
+            engine=intel_ctx.engine,
+            meaning_units=intel_ctx.meaning_units,
+            video_context=intel_ctx.video_context,
+            windows=shift_windows,
+            debug_dir=str(out),
+        )
+        repair_meta["cue_shift_repair"] = shift_meta
+        shift_diagnosis["local_cue_shift_windows_detected"] = len(shift_windows)
+        shift_diagnosis["local_cue_shift_windows_repaired"] = shift_meta.get(
+            "windows_requested", 0
+        )
+        shift_diagnosis["window_repairs_accepted"] = shift_meta.get(
+            "window_repairs_accepted", 0
+        )
+        shift_diagnosis["window_repairs_rejected"] = shift_meta.get(
+            "window_repairs_rejected", 0
+        )
+    else:
+        repair_meta["cue_shift_repair"] = {"skipped_reason": "no_shift_windows"}
+        shift_diagnosis["local_cue_shift_windows_detected"] = 0
+        shift_diagnosis["local_cue_shift_windows_repaired"] = 0
+        shift_diagnosis["window_repairs_accepted"] = 0
+        shift_diagnosis["window_repairs_rejected"] = 0
+
+    _save_json(out / "cue_shift_repair_report.json", repair_meta.get("cue_shift_repair") or {})
+    _save_json(out / "cue_shift_diagnosis_sample.json", shift_diagnosis)
 
     report_after = analyze_translation_quality(
         source_entries,

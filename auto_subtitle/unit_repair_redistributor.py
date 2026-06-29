@@ -14,6 +14,7 @@ from .semantic_alignment_guard import (
     detect_repeated_meaning,
     validate_repair_contract,
 )
+from .cue_shift_detector import count_shifts_in_cues
 from .subtitle_timing_optimizer import _parse_ts
 from .translation_quality_analyzer import _is_standalone_weak_fragment
 from .vi_compression import _cps
@@ -559,6 +560,16 @@ def evaluate_redistributed_unit(
         source_entries, trial, cue_indexes, meaning_units, video_context
     )
 
+    source_texts = [e.get("text", "") for e in source_entries]
+    vi_texts_before = [e.get("text", "") for e in vi_entries]
+    vi_texts_after = [e.get("text", "") for e in trial]
+    shift_before = count_shifts_in_cues(
+        cue_indexes, source_texts, vi_texts_before, video_context
+    )
+    shift_after = count_shifts_in_cues(
+        cue_indexes, source_texts, vi_texts_after, video_context
+    )
+
     accept = True
     reasons: List[str] = []
     needs_human_review = False
@@ -594,6 +605,10 @@ def evaluate_redistributed_unit(
     if after["severe_alignment"] > before["severe_alignment"]:
         accept = False
         reasons.append("severe_alignment_worse")
+
+    if shift_after > shift_before and not _semantic_improved(before, after):
+        accept = False
+        reasons.append("cue_shift_worsened")
 
     if accept:
         had_semantic_issues = (

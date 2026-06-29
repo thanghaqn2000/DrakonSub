@@ -237,15 +237,23 @@ def _first_bad_stage(issues: List[dict], cue_index: int) -> Optional[dict]:
     return cue_issues[0]
 
 
-def _run_pipeline_stages(debug: Path, *, reuse_raw: bool = False) -> Dict[str, Any]:
+def _run_pipeline_stages(
+    debug: Path,
+    *,
+    job_source: Optional[Path] = None,
+    reuse_raw: bool = False,
+) -> Dict[str, Any]:
     meta: Dict[str, Any] = {"stages": {}, "notes": []}
+    source_path = job_source or JOB_SOURCE
+    meta["job_source"] = str(source_path)
+    meta["job_dir"] = str(source_path.parent)
     config = SubtitleConfig.from_env()
     config.source_language = "en"
     config.translation_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
     if config.translation_engine not in ("openai",):
         config.translation_engine = "openai"
 
-    shutil.copy2(JOB_SOURCE, debug / "source.srt")
+    shutil.copy2(source_path, debug / "source.srt")
     source_entries = _load_srt(debug / "source.srt")
     meta["stages"]["source"] = {"path": str(debug / "source.srt"), "cue_count": len(source_entries)}
 
@@ -535,7 +543,8 @@ def _build_reports(debug: Path, run_meta: Dict[str, Any]) -> None:
             first_bad[str(cue)] = hit
 
     legacy_job_vi: Dict[str, Any] = {}
-    legacy_path = JOB_SOURCE.parent / "vi.srt"
+    job_dir = Path(run_meta.get("job_dir") or JOB_SOURCE.parent)
+    legacy_path = job_dir / "vi.srt"
     if legacy_path.exists():
         legacy_entries = _load_srt(legacy_path)
         legacy_map = _cue_map(legacy_entries)
@@ -619,7 +628,7 @@ def _build_reports(debug: Path, run_meta: Dict[str, Any]) -> None:
             "first_post_final_repair_text_change_stage": first_post_final_repair_text_stage,
             "final_vi_from_latest_run": final_vi_mtime is not None,
             "final_vi_path": str(final_vi_path),
-            "legacy_job_vi_path": str(JOB_SOURCE.parent / "vi.srt"),
+            "legacy_job_vi_path": str(job_dir / "vi.srt"),
             "final_vi_is_legacy_job_output": False,
         },
         "risky_cue_summary": {

@@ -1,0 +1,9 @@
+{
+  "sample": "outsider_36",
+  "engine": "openai",
+  "cache_key": "9e4dff953f2b32d4_raw_v1_gpt-4o-mini",
+  "source_hash": "9e4dff953f2b32d4",
+  "model": "gpt-4o-mini",
+  "prompt_version": "raw_v1",
+  "benchmark_pass": "end_to_end"
+}

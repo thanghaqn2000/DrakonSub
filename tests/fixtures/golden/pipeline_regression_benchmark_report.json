@@ -1,0 +1,182 @@
+{
+  "generated_at": "2026-06-29T16:57:17.079520+00:00",
+  "benchmark_mode": "pipeline_regression",
+  "translation_engine_requested": "openai",
+  "translation_engine_env": "gemini",
+  "benchmark_engine_status": "pass",
+  "manifest": "/Users/ducthang/Documents/my_personal/personal_project/auto-subtitle/scripts/benchmark_samples.json",
+  "samples": [
+    {
+      "id": "raise_price_17",
+      "job_id": "4f894703-d88e-4077-969c-8318610a372c",
+      "status": "ok",
+      "elapsed_seconds": 23.6,
+      "metrics": {
+        "pipeline_contract_status": "pass",
+        "post_final_repair_text_lock_status": "pass",
+        "source_cue_count": 17,
+        "final_cue_count": 17,
+        "quality_score": 76,
+        "score_band": "usable_minor_issues",
+        "risky_cue_count": 2,
+        "semantic_alignment_errors": 1,
+        "confirmed_error_counts": {
+          "semantic_drift_error": 1,
+          "semantic_alignment_error": 1
+        },
+        "pre_timing_quality_score": 76,
+        "pre_timing_risky_cue_count": 2,
+        "cps_error_count_pre_timing": 0,
+        "cps_error_count_post_timing": 0,
+        "human_review_needed": true,
+        "local_cue_shift_windows_detected": 0,
+        "local_cue_shift_windows_repaired": 0,
+        "window_repairs_accepted": 0,
+        "window_repairs_rejected": 0
+      },
+      "benchmark_mode": {
+        "mode": "reuse_raw",
+        "mode_type": "cached_raw_pipeline_regression",
+        "translation_engine_requested": "openai",
+        "translation_engine_effective": "cached_raw",
+        "raw_translation_cache_key": null,
+        "raw_translation_cached": false,
+        "score_interpretation": "pipeline_quality_on_fixed_raw_translation"
+      },
+      "artifact_dir": "/Users/ducthang/Documents/my_personal/personal_project/auto-subtitle/artifacts/multi_sample_benchmark/pipeline_regression/raise_price_17"
+    },
+    {
+      "id": "no_rush_19",
+      "job_id": "4a84a10f-e6d2-47e6-ad08-7c174db75c1e",
+      "status": "ok",
+      "elapsed_seconds": 44.6,
+      "metrics": {
+        "pipeline_contract_status": "pass",
+        "post_final_repair_text_lock_status": "pass",
+        "source_cue_count": 19,
+        "final_cue_count": 19,
+        "quality_score": 94,
+        "score_band": "good",
+        "risky_cue_count": 3,
+        "semantic_alignment_errors": 0,
+        "confirmed_error_counts": {
+          "readability_cps_error": 3
+        },
+        "pre_timing_quality_score": 86,
+        "pre_timing_risky_cue_count": 7,
+        "cps_error_count_pre_timing": 7,
+        "cps_error_count_post_timing": 3,
+        "human_review_needed": false,
+        "local_cue_shift_windows_detected": 0,
+        "local_cue_shift_windows_repaired": 0,
+        "window_repairs_accepted": 0,
+        "window_repairs_rejected": 0
+      },
+      "benchmark_mode": {
+        "mode": "fresh_translate",
+        "mode_type": "fresh_translate_end_to_end",
+        "translation_engine_requested": "openai",
+        "translation_engine_effective": "openai",
+        "raw_translation_cache_key": null,
+        "raw_translation_cached": false,
+        "score_interpretation": "end_to_end_quality_includes_translation_variance"
+      },
+      "artifact_dir": "/Users/ducthang/Documents/my_personal/personal_project/auto-subtitle/artifacts/multi_sample_benchmark/pipeline_regression/no_rush_19"
+    },
+    {
+      "id": "buffett_bitcoin_29",
+      "job_id": "6bfeabd2-7d63-4d0c-8561-bbbc61df5891",
+      "status": "ok",
+      "elapsed_seconds": 27.0,
+      "metrics": {
+        "pipeline_contract_status": "pass",
+        "post_final_repair_text_lock_status": "pass",
+        "source_cue_count": 29,
+        "final_cue_count": 29,
+        "quality_score": 90,
+        "score_band": "good",
+        "risky_cue_count": 1,
+        "semantic_alignment_errors": 1,
+        "confirmed_error_counts": {
+          "semantic_alignment_error": 1
+        },
+        "pre_timing_quality_score": 77,
+        "pre_timing_risky_cue_count": 5,
+        "cps_error_count_pre_timing": 4,
+        "cps_error_count_post_timing": 0,
+        "human_review_needed": true,
+        "local_cue_shift_windows_detected": 0,
+        "local_cue_shift_windows_repaired": 0,
+        "window_repairs_accepted": 0,
+        "window_repairs_rejected": 0
+      },
+      "benchmark_mode": {
+        "mode": "reuse_raw",
+        "mode_type": "cached_raw_pipeline_regression",
+        "translation_engine_requested": "openai",
+        "translation_engine_effective": "cached_raw",
+        "raw_translation_cache_key": null,
+        "raw_translation_cached": false,
+        "score_interpretation": "pipeline_quality_on_fixed_raw_translation"
+      },
+      "artifact_dir": "/Users/ducthang/Documents/my_personal/personal_project/auto-subtitle/artifacts/multi_sample_benchmark/pipeline_regression/buffett_bitcoin_29"
+    },
+    {
+      "id": "outsider_36",
+      "job_id": "2ecac211-578a-46e1-8b5d-7d80b874a6aa",
+      "status": "ok",
+      "elapsed_seconds": 66.0,
+      "metrics": {
+        "pipeline_contract_status": "pass",
+        "post_final_repair_text_lock_status": "pass",
+        "source_cue_count": 36,
+        "final_cue_count": 36,
+        "quality_score": 83,
+        "score_band": "usable_minor_issues",
+        "risky_cue_count": 5,
+        "semantic_alignment_errors": 0,
+        "confirmed_error_counts": {
+          "repeated_meaning_error": 4,
+          "readability_cps_error": 1
+        },
+        "pre_timing_quality_score": 72,
+        "pre_timing_risky_cue_count": 7,
+        "cps_error_count_pre_timing": 4,
+        "cps_error_count_post_timing": 1,
+        "human_review_needed": false,
+        "local_cue_shift_windows_detected": 0,
+        "local_cue_shift_windows_repaired": 0,
+        "window_repairs_accepted": 0,
+        "window_repairs_rejected": 0
+      },
+      "benchmark_mode": {
+        "mode": "fresh_translate",
+        "mode_type": "fresh_translate_end_to_end",
+        "translation_engine_requested": "openai",
+        "translation_engine_effective": "openai",
+        "raw_translation_cache_key": null,
+        "raw_translation_cached": false,
+        "score_interpretation": "end_to_end_quality_includes_translation_variance"
+      },
+      "artifact_dir": "/Users/ducthang/Documents/my_personal/personal_project/auto-subtitle/artifacts/multi_sample_benchmark/pipeline_regression/outsider_36"
+    }
+  ],
+  "deferred": [
+    {
+      "id": "success_232",
+      "job_id": "871ba89e-dfb5-4dbb-b7ff-2857621c7135",
+      "cue_count": 232,
+      "reason": "Too long for routine benchmark v1; schedule separate long-form run"
+    }
+  ],
+  "aggregate": {
+    "samples_run": 4,
+    "samples_ok": 4,
+    "contract_pass": 4,
+    "quality_score_min": 76,
+    "quality_score_max": 94,
+    "quality_score_avg": 85.75,
+    "any_semantic_errors": true,
+    "total_risky_cues": 11
+  }
+}

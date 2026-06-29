@@ -1,0 +1,9 @@
+{
+  "sample": "raise_price_17",
+  "engine": "openai",
+  "cache_key": "a7ea32ee3069c1ad_raw_v1_gpt-4o-mini",
+  "source_hash": "a7ea32ee3069c1ad",
+  "model": "gpt-4o-mini",
+  "prompt_version": "raw_v1",
+  "benchmark_pass": "end_to_end"
+}

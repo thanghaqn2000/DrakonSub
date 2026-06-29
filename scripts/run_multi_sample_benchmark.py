@@ -71,8 +71,9 @@ def _parse_flags(argv: List[str]) -> BenchmarkFlags:
     mode = "default"
     if "--both-modes" in argv:
         mode = "both"
-    elif "--benchmark-mode" in argv:
-        idx = argv.index("--benchmark-mode")
+    elif "--benchmark-mode" in argv or "--mode" in argv:
+        flag = "--benchmark-mode" if "--benchmark-mode" in argv else "--mode"
+        idx = argv.index(flag)
         if idx + 1 < len(argv):
             mode = argv[idx + 1].strip().lower()
     return BenchmarkFlags(
@@ -193,7 +194,8 @@ def _prepare_sample_debug(
         elif job_raw.exists():
             shutil.copy2(job_raw, out_dir / "vi_raw.srt")
             reuse_raw = True
-    elif flags.use_raw_cache:
+
+    if not reuse_raw and not flags.force_fresh and flags.use_raw_cache:
         cached = load_cached_vi_raw(sid, source, flags.requested_engine)
         if cached:
             shutil.copy2(cached, out_dir / "vi_raw.srt")

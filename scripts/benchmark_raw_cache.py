@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 PROMPT_VERSION = "raw_v1"
-RAW_CACHE_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "multi_sample_benchmark" / "raw_cache"
+ROOT = Path(__file__).resolve().parents[1]
+RAW_CACHE_ROOT = ROOT / "artifacts" / "multi_sample_benchmark" / "raw_cache"
+FIXTURE_RAW_CACHE_ROOT = ROOT / "tests" / "fixtures" / "benchmark_raw"
 
 
 def _model_name(engine: str) -> str:
@@ -42,14 +44,22 @@ def cache_meta_path(sample_id: str, engine: str, key: str) -> Path:
     return cache_dir(sample_id, engine, key) / "cache_meta.json"
 
 
+def _cached_vi_raw_at(root: Path, sample_id: str, engine: str, key: str) -> Optional[Path]:
+    path = root / sample_id / engine / key / "vi_raw.srt"
+    return path if path.exists() else None
+
+
 def load_cached_vi_raw(
     sample_id: str,
     source_path: Path,
     engine: str,
 ) -> Optional[Path]:
     key = cache_key(source_path, engine)
-    path = cache_vi_raw_path(sample_id, engine, key)
-    return path if path.exists() else None
+    for root in (RAW_CACHE_ROOT, FIXTURE_RAW_CACHE_ROOT):
+        found = _cached_vi_raw_at(root, sample_id, engine, key)
+        if found:
+            return found
+    return None
 
 
 def save_cached_vi_raw(

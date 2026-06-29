@@ -23,6 +23,9 @@ from .config import (
     VI_COMPRESSION_MIN_SHORTEN_RATIO,
     VI_COMPRESSION_TRIGGER_CPS,
     get_openai_model,
+    llm_chat_kwargs,
+    llm_temperature,
+    load_env,
 )
 from .openai_chat import create_chat_completion
 
@@ -360,8 +363,9 @@ def _call_openai_compress(
             {"role": "system", "content": _COMPRESSION_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2 if not strict else 0.1,
+        temperature=llm_temperature(0.2 if not strict else 0.1),
         response_format={"type": "json_object"},
+        **llm_chat_kwargs(),
     )
     content = response.choices[0].message.content or ""
     return _parse_compression_response(content, len(batch))

@@ -88,13 +88,13 @@ def _call_window_repair_model(prompt: str, engine: str) -> str:
 
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         content, _ = _call_gemini_json(
-            api_key, get_gemini_model(), _WINDOW_REPAIR_SYSTEM, prompt, temperature=0.2
+            api_key, get_gemini_model(), _WINDOW_REPAIR_SYSTEM, prompt, temperature=llm_temperature(0.2)
         )
         return content
 
     from openai import OpenAI
 
-    from .config import get_openai_model
+    from .config import get_openai_model, llm_chat_kwargs, llm_temperature
     from .openai_chat import create_chat_completion
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -105,8 +105,9 @@ def _call_window_repair_model(prompt: str, engine: str) -> str:
             {"role": "system", "content": _WINDOW_REPAIR_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        temperature=0.2,
+        temperature=llm_temperature(0.2),
         response_format={"type": "json_object"},
+        **llm_chat_kwargs(),
     )
     return response.choices[0].message.content or ""
 

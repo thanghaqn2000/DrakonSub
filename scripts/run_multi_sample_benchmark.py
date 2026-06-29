@@ -53,6 +53,7 @@ class BenchmarkFlags:
     use_raw_cache: bool = False
     only_sample: Optional[str] = None
     benchmark_mode: str = "default"  # default | pipeline_regression | end_to_end
+    deterministic: bool = False
 
 
 def _parse_flags(argv: List[str]) -> BenchmarkFlags:
@@ -84,6 +85,7 @@ def _parse_flags(argv: List[str]) -> BenchmarkFlags:
         use_raw_cache="--use-raw-cache" in argv,
         only_sample=only,
         benchmark_mode=mode,
+        deterministic="--deterministic" in argv,
     )
 
 
@@ -261,6 +263,10 @@ def _run_benchmark_pass(
     import os
 
     os.environ["TRANSLATION_ENGINE"] = flags.requested_engine
+    if pass_flags.deterministic:
+        os.environ["BENCHMARK_DETERMINISTIC"] = "1"
+    else:
+        os.environ.pop("BENCHMARK_DETERMINISTIC", None)
     results: List[dict] = []
     engine_samples: List[dict] = []
     engine_valid = True
@@ -376,6 +382,7 @@ def _run_benchmark_pass(
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "benchmark_mode": pass_name,
+        "deterministic": pass_flags.deterministic,
         "translation_engine_requested": pass_flags.requested_engine,
         "translation_engine_env": os.getenv("TRANSLATION_ENGINE", "openai"),
         "benchmark_engine_status": "pass" if engine_valid else "invalid_engine_config",
@@ -474,6 +481,7 @@ def main() -> int:
             use_raw_cache=True,
             reuse_raw_manifest=True,
             only_sample=flags.only_sample,
+            deterministic=flags.deterministic,
         )
         pr_root = OUT_ROOT / "pipeline_regression"
         report, code = _run_benchmark_pass(

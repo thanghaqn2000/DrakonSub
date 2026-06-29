@@ -1,0 +1,24 @@
+{
+  "detected_topic": "economics",
+  "confidence": 0.9,
+  "audience_level": "general_beginner",
+  "translation_style": "simple, natural Vietnamese subtitles for general adults",
+  "tone": "informal, conversational",
+  "short_summary": "Người nói giải thích sự khác biệt giữa tài sản tạo ra giá trị và những thứ phụ thuộc vào việc người khác trả giá cao hơn.",
+  "key_terms": [
+    {
+      "source": "productive assets",
+      "suggested_vi": "tài sản tạo ra giá trị",
+      "plain_explanation": "Tài sản có thể mang lại lợi nhuận hoặc giá trị, như nhà cho thuê hoặc trang trại sản xuất thực phẩm.",
+      "confidence": 0.9
+    }
+  ],
+  "named_entities": [],
+  "possible_asr_risks": [
+    "whatever his name was",
+    "Buffett Coin"
+  ],
+  "translation_warnings": [
+    "Câu nói có thể mang tính ẩn dụ hoặc không rõ ràng."
+  ]
+}

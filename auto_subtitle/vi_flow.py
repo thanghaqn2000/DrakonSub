@@ -21,6 +21,8 @@ from .config import (
     VI_FLOW_MIN_GROUP_SIZE,
     VI_FLOW_TINY_FRAGMENT_CHARS,
     get_openai_model,
+    llm_chat_kwargs,
+    llm_temperature,
     load_env,
 )
 from .openai_chat import create_chat_completion
@@ -468,8 +470,9 @@ def _call_openai_flow(
             {"role": "system", "content": _FLOW_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2 if strict else 0.25,
+        temperature=llm_temperature(0.2 if strict else 0.25),
         response_format={"type": "json_object"},
+        **llm_chat_kwargs(),
     )
     content = response.choices[0].message.content or ""
     return _parse_flow_response(content, len(group_indices))

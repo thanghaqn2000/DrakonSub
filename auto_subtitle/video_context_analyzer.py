@@ -8,7 +8,17 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import get_gemini_model, get_openai_model, get_translation_engine
+from .config import (
+    PROJECT_ROOT,
+    benchmark_deterministic_enabled,
+    get_gemini_model,
+    get_openai_model,
+    get_translation_engine,
+    llm_chat_kwargs,
+    llm_temperature,
+)
+
+_FIXTURE_CONTEXT_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "video_context"
 
 _MAX_TRANSCRIPT_CHARS = 12_000
 
@@ -108,8 +118,9 @@ def _call_openai_context(user_prompt: str) -> str:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2,
+        temperature=llm_temperature(0.2),
         response_format={"type": "json_object"},
+        **llm_chat_kwargs(),
     )
     return response.choices[0].message.content or ""
 
@@ -126,9 +137,17 @@ def _call_gemini_context(user_prompt: str) -> str:
         get_gemini_model(),
         _SYSTEM_PROMPT,
         user_prompt,
-        temperature=0.2,
+        temperature=llm_temperature(0.2),
     )
     return content
+
+
+def _context_cache_path(entries: List[dict]) -> Path:
+    import hashlib
+
+    blob = _build_transcript(entries).encode("utf-8")
+    key = hashlib.sha256(blob).hexdigest()[:16]
+    return _FIXTURE_CONTEXT_ROOT / f"{key}.json"
 
 
 def analyze_video_context(
@@ -142,7 +161,15 @@ def analyze_video_context(
     """
     One model call to extract dynamic video context from English SRT entries.
     Falls back to defaults if the API call fails.
+    In benchmark deterministic mode, reuse cached context keyed by transcript hash.
     """
+    cache_path = _context_cache_path(entries)
+    if benchmark_deterministic_enabled() and cache_path.exists():
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     transcript = _build_transcript(entries)
     if not transcript.strip():
         return _default_context(user_topic, audience_level, style)
@@ -185,6 +212,8 @@ def analyze_video_context(
     data.setdefault("named_entities", [])
     data.setdefault("possible_asr_risks", [])
     data.setdefault("translation_warnings", [])
+    if benchmark_deterministic_enabled():
+        save_video_context(cache_path, data)
     return data
 
 

@@ -1,0 +1,34 @@
+{
+  "detected_topic": "economics",
+  "confidence": 0.8,
+  "audience_level": "general_beginner",
+  "translation_style": "simple, natural Vietnamese subtitles for general adults",
+  "tone": "conversational",
+  "short_summary": "Nên kiên nhẫn và không vội vàng trong việc kiếm tiền, hãy từ từ xây dựng và học hỏi.",
+  "key_terms": [
+    {
+      "source": "money",
+      "suggested_vi": "tiền",
+      "plain_explanation": "Đơn vị trao đổi trong giao dịch."
+    },
+    {
+      "source": "check",
+      "suggested_vi": "séc",
+      "plain_explanation": "Giấy tờ dùng để rút tiền từ tài khoản ngân hàng."
+    },
+    {
+      "source": "build it",
+      "suggested_vi": "xây dựng nó",
+      "plain_explanation": "Phát triển hoặc tạo ra một cái gì đó."
+    }
+  ],
+  "named_entities": [],
+  "possible_asr_risks": [
+    "don't be in no rush",
+    "take no money",
+    "take no check"
+  ],
+  "translation_warnings": [
+    "Câu nói có thể mang tính khẩu ngữ, cần chú ý khi dịch để giữ nguyên ý nghĩa."
+  ]
+}

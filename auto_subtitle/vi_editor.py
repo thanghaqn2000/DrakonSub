@@ -18,6 +18,7 @@ from .config import (
     get_vi_editor_batch_size,
     get_vi_editor_context_window,
     get_vi_editor_temperature,
+    llm_chat_kwargs,
     load_env,
     resolve_vi_editor_model,
     resolve_vi_editor_provider,
@@ -363,6 +364,7 @@ def _call_openai_editor(
         ],
         temperature=temperature,
         response_format={"type": "json_object"},
+        **llm_chat_kwargs(),
     )
     content = response.choices[0].message.content or ""
     usage = {}

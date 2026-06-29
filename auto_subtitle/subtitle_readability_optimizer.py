@@ -220,7 +220,7 @@ def _openai_rewrite_batch(
     import os
     from openai import OpenAI
 
-    from .config import get_openai_model
+    from .config import get_openai_model, llm_chat_kwargs, llm_temperature
     from .openai_chat import create_chat_completion
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -251,8 +251,9 @@ def _openai_rewrite_batch(
                 {"role": "system", "content": _OPENAI_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
+            temperature=llm_temperature(0.3),
             response_format={"type": "json_object"},
+            **llm_chat_kwargs(),
         )
         content = (response.choices[0].message.content or "").strip()
         if content.startswith("```"):

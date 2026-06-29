@@ -151,8 +151,33 @@ def get_vi_editor_context_window() -> int:
     return DEFAULT_VI_EDITOR_CONTEXT_WINDOW
 
 
+def benchmark_deterministic_enabled() -> bool:
+    load_env()
+    raw = (os.getenv("BENCHMARK_DETERMINISTIC") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def llm_temperature(default: float) -> float:
+    if benchmark_deterministic_enabled():
+        return 0.0
+    return default
+
+
+def llm_chat_kwargs() -> dict:
+    """Extra OpenAI chat params for benchmark deterministic mode."""
+    if not benchmark_deterministic_enabled():
+        return {}
+    kwargs: dict = {"top_p": 1}
+    seed_raw = (os.getenv("BENCHMARK_LLM_SEED") or "42").strip()
+    try:
+        kwargs["seed"] = int(seed_raw)
+    except ValueError:
+        pass
+    return kwargs
+
+
 def get_vi_editor_temperature() -> float:
-    return DEFAULT_VI_EDITOR_TEMPERATURE
+    return llm_temperature(DEFAULT_VI_EDITOR_TEMPERATURE)
 
 
 def vi_editor_save_debug() -> bool:

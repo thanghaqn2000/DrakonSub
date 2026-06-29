@@ -19,11 +19,25 @@ Manifest mẫu: [`scripts/benchmark_samples.json`](../scripts/benchmark_samples.
 python scripts/run_multi_sample_benchmark.py \
   --engine openai \
   --use-raw-cache \
-  --mode pipeline_regression
+  --mode pipeline_regression \
+  --deterministic
 
 python scripts/ci_regression_check.py \
   --report artifacts/multi_sample_benchmark/pipeline_regression/benchmark_report.json
 ```
+
+`--deterministic` (hoặc `BENCHMARK_DETERMINISTIC=1`) đặt `temperature=0`, `seed=42`, `top_p=1` cho các stage LLM sau raw translation.
+
+### Stability gate (3 lần liên tiếp)
+
+```bash
+python scripts/run_benchmark_stability_check.py \
+  --runs 3 \
+  --engine openai \
+  --deterministic
+```
+
+Tạo `determinism_diagnosis.json` và `stability_check_report.json`. Exit 0 khi 3/3 pass CI.
 
 `--mode` là alias của `--benchmark-mode`.
 
@@ -79,3 +93,4 @@ Workflow [`.github/workflows/benchmark-regression.yml`](../.github/workflows/ben
 
 - `TRANSLATION_ENGINE` trong `.env` có thể khác engine benchmark — luôn truyền `--engine openai` (hoặc `gemini`) explicit.
 - Benchmark runner set `TRANSLATION_ENGINE` theo `--engine` khi chạy pass.
+- `BENCHMARK_DETERMINISTIC=1` / `--deterministic`: temperature=0, seed=42; video context cache tại `tests/fixtures/video_context/` (key = transcript hash).

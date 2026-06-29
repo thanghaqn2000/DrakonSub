@@ -242,6 +242,7 @@ def _run_pipeline_stages(
     *,
     job_source: Optional[Path] = None,
     reuse_raw: bool = False,
+    translation_engine: Optional[str] = None,
 ) -> Dict[str, Any]:
     meta: Dict[str, Any] = {"stages": {}, "notes": []}
     source_path = job_source or JOB_SOURCE
@@ -249,9 +250,16 @@ def _run_pipeline_stages(
     meta["job_dir"] = str(source_path.parent)
     config = SubtitleConfig.from_env()
     config.source_language = "en"
-    config.translation_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
-    if config.translation_engine not in ("openai",):
-        config.translation_engine = "openai"
+    from auto_subtitle.config import SUPPORTED_TRANSLATION_ENGINES
+
+    requested_engine = (
+        translation_engine or os.getenv("TRANSLATION_ENGINE", "openai")
+    ).strip().lower()
+    if requested_engine not in SUPPORTED_TRANSLATION_ENGINES:
+        requested_engine = "openai"
+    config.translation_engine = requested_engine
+    os.environ["TRANSLATION_ENGINE"] = requested_engine
+    meta["translation_engine_requested"] = requested_engine
 
     shutil.copy2(source_path, debug / "source.srt")
     source_entries = _load_srt(debug / "source.srt")
@@ -298,8 +306,10 @@ def _run_pipeline_stages(
     vi_raw_path = debug / "vi_raw.srt"
     alignment_applied = False
     translation_retry_applied = False
+    used_cached_raw = False
     if reuse_raw and vi_raw_path.exists():
         vi_raw_entries = _load_srt(vi_raw_path)
+        used_cached_raw = True
         meta["notes"].append("Reused existing vi_raw.srt")
     else:
         translate_srt_file(
@@ -309,6 +319,10 @@ def _run_pipeline_stages(
             translation_context=translation_context,
         )
         vi_raw_entries = _load_srt(vi_raw_path)
+    meta["translation_mode"] = "reuse_raw" if used_cached_raw else "fresh_translate"
+    meta["translation_engine_effective"] = (
+        "cached_raw" if used_cached_raw else config.translation_engine
+    )
     meta["stages"]["vi_raw"] = {"path": str(vi_raw_path), "cue_count": len(vi_raw_entries)}
 
     def _retry_translate() -> List[dict]:

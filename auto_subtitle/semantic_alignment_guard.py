@@ -370,9 +370,23 @@ def _detect_missing_source_concepts(
     for b in bridges:
         src = b["source"]
         sug = b["suggested_vi"]
-        if src and src in en.lower():
-            if sug and sug not in vi.lower() and len(sug) >= 4:
-                return True, f"glossary '{src}' not reflected in VI"
+        kind = _glossary_entry_kind(src)
+        if not (src and src in en.lower()):
+            continue
+        if kind in ("phrase", "idiom", "discourse_marker"):
+            unit_cues = _find_unit_texts(cue_idx, source_texts, vi_texts, meaning_units)
+            unit_en = " ".join(source_texts[c - 1] for c in unit_cues)
+            unit_vi = " ".join(vi_texts[c - 1] for c in unit_cues)
+            if _association_score(unit_vi, unit_en, bridges) >= 3.0:
+                continue
+            if _association_score(vi, en, bridges) >= 2.0:
+                continue
+            en_c = _extract_concepts(en, "en")
+            vi_c = _extract_concepts(vi, "vi")
+            if en_c and vi_c and _overlap_ratio(en_c, vi_c) >= 0.2:
+                continue
+        if sug and sug not in vi.lower() and len(sug) >= 4:
+            return True, f"glossary '{src}' not reflected in VI"
 
     proper = re.findall(r"\b[A-Z][a-z]{3,}\b", en)
     en_words = re.findall(r"\b[\w']+\b", en)
@@ -483,6 +497,33 @@ def _detect_glossary_misplacement(
     return False, ""
 
 
+def _glossary_entry_kind(source: str) -> str:
+    words = [w for w in source.lower().split() if w]
+    if len(words) >= 3:
+        return "idiom"
+    if len(words) == 2:
+        return "phrase"
+    if source.lower() in _DISCOURSE_CAPITALIZED:
+        return "discourse_marker"
+    return "term"
+
+
+def _en_rhetorical_repeat(en_a: str, en_b: str) -> bool:
+    """True when two EN cues repeat the same rhetorical idea (informal speech)."""
+    ca = _extract_concepts(en_a, "en")
+    cb = _extract_concepts(en_b, "en")
+    if ca and cb:
+        overlap = len(ca & cb) / min(len(ca), len(cb))
+        if overlap >= 0.45:
+            return True
+    na = re.sub(r"\s+", " ", en_a.lower().strip())
+    nb = re.sub(r"\s+", " ", en_b.lower().strip())
+    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(shorter) >= 10 and shorter in longer:
+        return True
+    return False
+
+
 def _detect_duplicate_vi_misalignment(
     source_texts: List[str],
     vi_texts: List[str],
@@ -497,6 +538,18 @@ def _detect_duplicate_vi_misalignment(
     issues: Dict[int, str] = {}
     for _key, cues in buckets.items():
         if len(cues) < 2:
+            continue
+        rhetorical = True
+        for a in range(len(cues)):
+            for b in range(a + 1, len(cues)):
+                if not _en_rhetorical_repeat(
+                    source_texts[cues[a] - 1], source_texts[cues[b] - 1]
+                ):
+                    rhetorical = False
+                    break
+            if not rhetorical:
+                break
+        if rhetorical:
             continue
         en_sigs = [_extract_concepts(source_texts[c - 1], "en") for c in cues]
         if len({frozenset(s) for s in en_sigs}) > 1:

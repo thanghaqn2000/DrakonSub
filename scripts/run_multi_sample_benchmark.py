@@ -142,7 +142,8 @@ def _write_summary(report: dict, path: Path) -> None:
         "# Multi-sample Benchmark Summary",
         "",
         f"Generated: {report.get('generated_at')}",
-        f"Engine: {report.get('translation_engine')}",
+        f"Engine requested: **{report.get('translation_engine_requested')}** "
+        f"(status: {report.get('benchmark_engine_status')})",
         "",
         "## Aggregate",
         "",
@@ -184,10 +185,23 @@ def main() -> int:
     manifest = _load_manifest()
     jobs_root = Path(manifest["jobs_root"])
     only = None
+    requested_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
+    if "--engine" in sys.argv:
+        idx = sys.argv.index("--engine")
+        if idx + 1 < len(sys.argv):
+            requested_engine = sys.argv[idx + 1].strip().lower()
     if "--sample" in sys.argv:
         idx = sys.argv.index("--sample")
         if idx + 1 < len(sys.argv):
             only = sys.argv[idx + 1]
+
+    from auto_subtitle.config import SUPPORTED_TRANSLATION_ENGINES
+
+    if requested_engine not in SUPPORTED_TRANSLATION_ENGINES:
+        print(f"Unsupported engine: {requested_engine}", file=sys.stderr)
+        return 1
+    os.environ["TRANSLATION_ENGINE"] = requested_engine
+    env_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
 
     samples: List[dict] = manifest["samples"]
     if only:
@@ -198,17 +212,22 @@ def main() -> int:
 
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     results: List[dict] = []
-    engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
+    engine_samples: List[dict] = []
+    engine_valid = True
 
     for sample in samples:
         sid = sample["id"]
         out_dir = OUT_ROOT / sid
-        print(f"\n[Benchmark] === {sid} ({sample.get('cue_count')} cues) ===")
+        reuse_raw = bool(sample.get("reuse_raw"))
+        print(
+            f"\n[Benchmark] === {sid} ({sample.get('cue_count')} cues) "
+            f"engine={requested_engine} reuse_raw={reuse_raw} ==="
+        )
         source = _prepare_sample_debug(
             sample,
             jobs_root,
             out_dir,
-            reuse_raw=bool(sample.get("reuse_raw")),
+            reuse_raw=reuse_raw,
         )
         if source is None:
             print(f"[Benchmark] SKIP {sid}: missing source.srt")
@@ -220,10 +239,32 @@ def main() -> int:
             run_meta = _run_pipeline_stages(
                 out_dir,
                 job_source=source,
-                reuse_raw=bool(sample.get("reuse_raw")),
+                reuse_raw=reuse_raw,
+                translation_engine=requested_engine,
             )
             _build_reports(out_dir, run_meta)
             metrics = _sample_result(out_dir)
+            mode = run_meta.get("translation_mode", "fresh_translate")
+            effective = run_meta.get("translation_engine_effective", requested_engine)
+            is_valid = (
+                mode == "reuse_raw"
+                or effective == requested_engine
+            )
+            if not is_valid:
+                engine_valid = False
+            engine_samples.append(
+                {
+                    "sample": sid,
+                    "mode": mode,
+                    "translation_engine_requested": requested_engine,
+                    "translation_engine_effective": effective,
+                    "is_valid": is_valid,
+                }
+            )
+            print(
+                f"[Benchmark] {sid} engine: requested={requested_engine} "
+                f"effective={effective} mode={mode}"
+            )
             status = "ok"
             if metrics.get("pipeline_contract_status") != "pass":
                 status = "contract_fail"
@@ -255,7 +296,9 @@ def main() -> int:
     scores = [r["metrics"]["quality_score"] for r in ok if r["metrics"].get("quality_score") is not None]
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "translation_engine": engine,
+        "translation_engine_requested": requested_engine,
+        "translation_engine_env": env_engine,
+        "benchmark_engine_status": "pass" if engine_valid else "invalid_engine_config",
         "manifest": str(MANIFEST),
         "samples": results,
         "deferred": manifest.get("deferred", []),
@@ -277,6 +320,16 @@ def main() -> int:
 
     report_path = OUT_ROOT / "benchmark_report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    engine_report = {
+        "requested_engine": requested_engine,
+        "env_translation_engine": env_engine,
+        "samples": engine_samples,
+        "benchmark_engine_status": "pass" if engine_valid else "invalid_engine_config",
+    }
+    (OUT_ROOT / "engine_selection_report.json").write_text(
+        json.dumps(engine_report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     _write_summary(report, OUT_ROOT / "benchmark_summary.md")
 
     import subprocess
@@ -288,6 +341,10 @@ def main() -> int:
     shift_script = ROOT / "scripts" / "build_cue_shift_diagnosis.py"
     if shift_script.exists():
         subprocess.run([sys.executable, str(shift_script)], check=False, cwd=str(ROOT))
+
+    no_rush_script = ROOT / "scripts" / "build_no_rush_diagnosis.py"
+    if no_rush_script.exists():
+        subprocess.run([sys.executable, str(no_rush_script)], check=False, cwd=str(ROOT))
 
     print(f"\n[Benchmark] Done → {report_path}")
     return 0 if all(r.get("status") == "ok" for r in results) else 1

@@ -19,7 +19,10 @@ OUT_ROOT = ROOT / "artifacts" / "multi_sample_benchmark"
 def _load_sample_diagnosis(sample_dir: Path) -> dict:
     cached = sample_dir / "cue_shift_diagnosis_sample.json"
     if cached.exists():
-        return json.loads(cached.read_text(encoding="utf-8"))
+        data = json.loads(cached.read_text(encoding="utf-8"))
+        if data.get("sample") in (None, "job"):
+            data["sample"] = sample_dir.name
+        return data
 
     meaning_units = []
     mu_path = sample_dir / "meaning_units.json"

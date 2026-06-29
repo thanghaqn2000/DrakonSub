@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop_sa_bridge.sh",
+        "loop_limit": 100
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/session_sa_bridge.sh"
+      }
+    ]
+  }
+}

@@ -24,3 +24,8 @@ env/
 *.mp4
 *.srt
 *.wav
+
+# SA bridge runtime (config.json is committed)
+.sa_bridge/state.json
+.sa_bridge/last_sa_response.md
+.sa_bridge/*.log

@@ -483,7 +483,7 @@ def _unit_quality_score(
         if issue["cue_index"] in cue_indexes:
             warnings += len(issue.get("errors", []))
 
-    repeated = detect_repeated_meaning(source_texts, vi_texts)
+    repeated = detect_repeated_meaning(source_texts, vi_texts, meaning_units)
     repeated_count = sum(1 for c in cue_indexes if c in repeated)
 
     for idx in cue_indexes:

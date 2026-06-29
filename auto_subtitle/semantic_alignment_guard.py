@@ -38,6 +38,16 @@ _GENERIC_VI_PATTERNS = [
 _QUESTION_WORDS = frozenset(
     {"what", "when", "where", "why", "how", "who", "which", "that", "this", "these", "those"}
 )
+# Sentence-initial / discourse words often capitalized in EN cues — not named entities.
+_DISCOURSE_CAPITALIZED = frozenset(
+    {
+        "suppose", "well", "because", "embrace", "now", "then", "but", "however", "although",
+        "though", "yes", "okay", "right", "sure", "look", "listen", "remember", "imagine",
+        "consider", "actually", "basically", "honestly", "literally", "seriously", "anyway",
+        "so", "and", "or", "if", "when", "while", "after", "before", "since", "until",
+        "here", "there", "just", "maybe", "perhaps", "really", "simply", "clearly",
+    }
+)
 _QUESTION_MARKERS_EN = re.compile(r"\?|^(why|how|what|when|where|who)\b", re.I)
 _QUESTION_MARKERS_VI = re.compile(r"\?|^(tại sao|sao|gì|ai|ở đâu|khi nào|thế nào)\b", re.I)
 
@@ -233,9 +243,17 @@ def _downgrade_to_unit_warnings(
 def detect_repeated_meaning(
     source_texts: List[str],
     vi_texts: List[str],
+    meaning_units: Optional[List[dict]] = None,
 ) -> Dict[int, str]:
     """Flag adjacent cues that repeat the same VI idea without EN justification."""
     issues: Dict[int, str] = {}
+    cue_to_unit: Dict[int, int] = {}
+    if meaning_units:
+        for unit in meaning_units:
+            uid = unit.get("unit_id")
+            for c in unit.get("cue_indexes") or []:
+                cue_to_unit[c] = uid
+
     n = len(source_texts)
     for i in range(1, n):
         vi1 = vi_texts[i - 1].strip()
@@ -250,6 +268,11 @@ def detect_repeated_meaning(
         en1 = _extract_concepts(source_texts[i - 1], "en")
         en2 = _extract_concepts(source_texts[i], "en")
         en_overlap = len(en1 & en2) / min(len(en1), len(en2)) if en1 and en2 else 0.0
+        same_unit = cue_to_unit.get(i) is not None and cue_to_unit.get(i) == cue_to_unit.get(i + 1)
+
+        v1l, v2l = vi1.lower(), vi2.lower()
+        if same_unit and (v1l in v2l or v2l in v1l) and min(len(vi1), len(vi2)) >= 8:
+            continue
 
         v1q = vi1.rstrip("?").strip().lower()
         v2q = vi2.rstrip("?").strip().lower()
@@ -259,11 +282,13 @@ def detect_repeated_meaning(
             and (v1q in v2q or v2q in v1q or vi_overlap >= 0.55)
         )
 
-        if en_overlap > 0.35:
+        en_overlap_ok = en_overlap > 0.35 or (same_unit and en_overlap > 0.15)
+        if en_overlap_ok:
             continue
+        vi_threshold = 0.65 if same_unit else 0.5
         if question_repeat:
             reason = "adjacent cues repeat the same question"
-        elif vi_overlap >= 0.5:
+        elif vi_overlap >= vi_threshold:
             reason = f"adjacent cues repeat meaning (VI overlap {vi_overlap:.0%})"
         else:
             continue
@@ -350,9 +375,27 @@ def _detect_missing_source_concepts(
                 return True, f"glossary '{src}' not reflected in VI"
 
     proper = re.findall(r"\b[A-Z][a-z]{3,}\b", en)
-    missing = [
-        p for p in proper if p.lower() not in _QUESTION_WORDS and p.lower() not in vi.lower()
+    en_words = re.findall(r"\b[\w']+\b", en)
+    first_word = en_words[0].rstrip(".,?!") if en_words else ""
+    named_in_context = [
+        str(ne).lower().strip()
+        for ne in (video_context or {}).get("named_entities") or []
+        if str(ne).strip()
     ]
+    missing = []
+    for p in proper:
+        pl = p.lower()
+        if pl in _QUESTION_WORDS or pl in _DISCOURSE_CAPITALIZED:
+            continue
+        if p == first_word:
+            continue
+        if pl in vi.lower():
+            continue
+        idx = en.find(p)
+        mid_sentence = idx > 0 and not en[:idx].strip().endswith((".", "!", "?"))
+        in_context = any(pl in ne or ne in pl for ne in named_in_context)
+        if in_context or (mid_sentence and not named_in_context):
+            missing.append(p)
     if missing:
         return True, f"named entity missing in VI: {missing[:3]}"
 
@@ -424,6 +467,13 @@ def _detect_glossary_misplacement(
                     continue
         own_en = _extract_concepts(source_texts[cue_idx - 1], "en")
         if concepts & own_en:
+            continue
+        if any(
+            o == c or o.rstrip("s") == c.rstrip("s")
+            for o in own_en
+            for c in concepts
+            if len(o) >= 4 and len(c) >= 4
+        ):
             continue
         for j in range(max(1, cue_idx - window), min(len(source_texts), cue_idx + window) + 1):
             if j == cue_idx:

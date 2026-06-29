@@ -119,6 +119,10 @@ def _is_standalone_weak_fragment(text: str) -> bool:
     words = text.split()
     if len(words) > 6:
         return False
+    if len(words) == 1 and len(text) >= 4 and not _WEAK_FRAGMENT_START_RE.match(text):
+        return False
+    if len(words) >= 2 and not _WEAK_FRAGMENT_START_RE.match(text) and len(text) < 12:
+        return False
     if len(text) < 12 and not text.endswith("?"):
         return True
     if _WEAK_FRAGMENT_START_RE.match(text) and len(words) <= 3:
@@ -319,7 +323,7 @@ def analyze_translation_quality(
 
     source_texts = [e.get("text", "") for e in source_entries]
     vi_texts = [e.get("text", "") for e in vi_entries]
-    repeated_meaning = detect_repeated_meaning(source_texts, vi_texts)
+    repeated_meaning = detect_repeated_meaning(source_texts, vi_texts, meaning_units)
 
     for i, (src_e, vi_e) in enumerate(zip(source_entries, vi_entries), start=1):
         src = src_e.get("text", "")

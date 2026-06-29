@@ -250,6 +250,13 @@ def main() -> int:
     report_path = OUT_ROOT / "benchmark_report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _write_summary(report, OUT_ROOT / "benchmark_summary.md")
+
+    import subprocess
+
+    diag_script = ROOT / "scripts" / "build_cross_sample_diagnosis.py"
+    if diag_script.exists():
+        subprocess.run([sys.executable, str(diag_script)], check=False, cwd=str(ROOT))
+
     print(f"\n[Benchmark] Done → {report_path}")
     return 0 if all(r.get("status") == "ok" for r in results) else 1
 

@@ -497,6 +497,29 @@ def _detect_glossary_misplacement(
     return False, ""
 
 
+def _content_absorbed_in_previous_cue(
+    cue_idx: int,
+    source_texts: List[str],
+    vi_texts: List[str],
+    video_context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """EN micro-cue rendered as punctuation while previous VI holds the proposition."""
+    if cue_idx <= 1:
+        return False
+    en = source_texts[cue_idx - 1].strip()
+    vi = vi_texts[cue_idx - 1].strip()
+    if not en or len(en.split()) > 4:
+        return False
+    if vi.strip(". ,;:!?") and vi not in (".", ",", ";", ":", "!", "?"):
+        return False
+    prev_vi = vi_texts[cue_idx - 2].strip()
+    if not prev_vi:
+        return False
+    bridges = _glossary_bridges(video_context)
+    combined_en = f"{source_texts[cue_idx - 2].strip()} {en}"
+    return _association_score(prev_vi, combined_en, bridges) >= 3.0
+
+
 def _glossary_entry_kind(source: str) -> str:
     words = [w for w in source.lower().split() if w]
     if len(words) >= 3:
@@ -586,44 +609,48 @@ def analyze_semantic_alignment(
             reasons.append("non-empty source cue has empty VI")
 
         if en and vi:
-            shifted, shift_reason, conf = _detect_cue_shift(
+            absorbed = _content_absorbed_in_previous_cue(
                 i, source_texts, vi_texts, video_context
             )
-            if shifted:
-                errors.append("semantic_alignment_error")
-                reasons.append(shift_reason)
-                confidence = max(confidence, conf)
+            if not absorbed:
+                shifted, shift_reason, conf = _detect_cue_shift(
+                    i, source_texts, vi_texts, video_context
+                )
+                if shifted:
+                    errors.append("semantic_alignment_error")
+                    reasons.append(shift_reason)
+                    confidence = max(confidence, conf)
 
-            missing, miss_reason = _detect_missing_source_concepts(
-                i, source_texts, vi_texts, video_context, meaning_units
-            )
-            if missing:
-                errors.append("semantic_drift_error")
-                reasons.append(miss_reason)
-                confidence = max(confidence, 0.7)
+                missing, miss_reason = _detect_missing_source_concepts(
+                    i, source_texts, vi_texts, video_context, meaning_units
+                )
+                if missing:
+                    errors.append("semantic_drift_error")
+                    reasons.append(miss_reason)
+                    confidence = max(confidence, 0.7)
 
-            if _detect_generic_vi_when_specific_en(en, vi):
-                errors.append("semantic_alignment_error")
-                reasons.append("VI too generic for specific EN cue")
-                confidence = max(confidence, 0.65)
+                if _detect_generic_vi_when_specific_en(en, vi):
+                    errors.append("semantic_alignment_error")
+                    reasons.append("VI too generic for specific EN cue")
+                    confidence = max(confidence, 0.65)
 
-            if _detect_question_mismatch(en, vi):
-                errors.append("semantic_alignment_error")
-                reasons.append("question/statement mismatch between EN and VI")
-                confidence = max(confidence, 0.6)
+                if _detect_question_mismatch(en, vi):
+                    errors.append("semantic_alignment_error")
+                    reasons.append("question/statement mismatch between EN and VI")
+                    confidence = max(confidence, 0.6)
 
-            gloss, gloss_reason = _detect_glossary_misplacement(
-                i, source_texts, vi_texts, video_context
-            )
-            if gloss:
-                errors.append("semantic_alignment_error")
-                reasons.append(gloss_reason)
-                confidence = max(confidence, 0.75)
+                gloss, gloss_reason = _detect_glossary_misplacement(
+                    i, source_texts, vi_texts, video_context
+                )
+                if gloss:
+                    errors.append("semantic_alignment_error")
+                    reasons.append(gloss_reason)
+                    confidence = max(confidence, 0.75)
 
-            if i in duplicate_issues:
-                errors.append("semantic_alignment_error")
-                reasons.append(duplicate_issues[i])
-                confidence = max(confidence, 0.6)
+                if i in duplicate_issues:
+                    errors.append("semantic_alignment_error")
+                    reasons.append(duplicate_issues[i])
+                    confidence = max(confidence, 0.6)
 
         if errors:
             alignment_error_cues.add(i)

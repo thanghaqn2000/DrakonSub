@@ -7,9 +7,10 @@ import json
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -19,6 +20,14 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 import importlib.util
+
+from scripts.benchmark_raw_cache import (
+    cache_key as raw_cache_key,
+    load_cached_vi_raw,
+    mode_type_for,
+    save_cached_vi_raw,
+    score_interpretation,
+)
 
 _audit_path = ROOT / "scripts" / "run_cue_mapping_audit.py"
 _spec = importlib.util.spec_from_file_location("run_cue_mapping_audit", _audit_path)
@@ -33,6 +42,48 @@ _run_pipeline_stages = _audit._run_pipeline_stages
 MANIFEST = ROOT / "scripts" / "benchmark_samples.json"
 OUT_ROOT = ROOT / "artifacts" / "multi_sample_benchmark"
 DEBUG_BASELINE = ROOT / "debug"
+
+
+@dataclass
+class BenchmarkFlags:
+    requested_engine: str
+    force_fresh: bool = False
+    reuse_raw_manifest: bool = False
+    cache_raw: bool = False
+    use_raw_cache: bool = False
+    only_sample: Optional[str] = None
+    benchmark_mode: str = "default"  # default | pipeline_regression | end_to_end
+
+
+def _parse_flags(argv: List[str]) -> BenchmarkFlags:
+    import os
+
+    engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
+    if "--engine" in argv:
+        idx = argv.index("--engine")
+        if idx + 1 < len(argv):
+            engine = argv[idx + 1].strip().lower()
+    only = None
+    if "--sample" in argv:
+        idx = argv.index("--sample")
+        if idx + 1 < len(argv):
+            only = argv[idx + 1]
+    mode = "default"
+    if "--both-modes" in argv:
+        mode = "both"
+    elif "--benchmark-mode" in argv:
+        idx = argv.index("--benchmark-mode")
+        if idx + 1 < len(argv):
+            mode = argv[idx + 1].strip().lower()
+    return BenchmarkFlags(
+        requested_engine=engine,
+        force_fresh="--fresh" in argv,
+        reuse_raw_manifest="--reuse-raw" in argv,
+        cache_raw="--cache-raw" in argv,
+        use_raw_cache="--use-raw-cache" in argv,
+        only_sample=only,
+        benchmark_mode=mode,
+    )
 
 
 def _load_manifest() -> dict:
@@ -113,12 +164,12 @@ def _prepare_sample_debug(
     jobs_root: Path,
     out_dir: Path,
     *,
-    reuse_raw: bool,
-) -> Path | None:
+    flags: BenchmarkFlags,
+) -> Tuple[Optional[Path], bool, bool, Optional[str]]:
     job_dir = jobs_root / sample["job_id"]
     source = job_dir / "source.srt"
     if not source.exists():
-        return None
+        return None, False, False, None
 
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -126,15 +177,31 @@ def _prepare_sample_debug(
 
     shutil.copy2(source, out_dir / "source.srt")
 
-    if reuse_raw:
+    sid = sample["id"]
+    reuse_raw = False
+    used_raw_cache = False
+    key: Optional[str] = None
+
+    if flags.force_fresh:
+        reuse_raw = False
+    elif flags.reuse_raw_manifest or sample.get("reuse_raw"):
         job_raw = job_dir / "vi_raw.srt"
         baseline_raw = DEBUG_BASELINE / "vi_raw.srt"
         if sample["id"] == "buffett_bitcoin_29" and baseline_raw.exists():
             shutil.copy2(baseline_raw, out_dir / "vi_raw.srt")
+            reuse_raw = True
         elif job_raw.exists():
             shutil.copy2(job_raw, out_dir / "vi_raw.srt")
+            reuse_raw = True
+    elif flags.use_raw_cache:
+        cached = load_cached_vi_raw(sid, source, flags.requested_engine)
+        if cached:
+            shutil.copy2(cached, out_dir / "vi_raw.srt")
+            reuse_raw = True
+            used_raw_cache = True
+            key = raw_cache_key(source, flags.requested_engine)
 
-    return source
+    return source, reuse_raw, used_raw_cache, key
 
 
 def _write_summary(report: dict, path: Path) -> None:
@@ -142,6 +209,7 @@ def _write_summary(report: dict, path: Path) -> None:
         "# Multi-sample Benchmark Summary",
         "",
         f"Generated: {report.get('generated_at')}",
+        f"Benchmark mode: **{report.get('benchmark_mode', 'default')}**",
         f"Engine requested: **{report.get('translation_engine_requested')}** "
         f"(status: {report.get('benchmark_engine_status')})",
         "",
@@ -156,21 +224,21 @@ def _write_summary(report: dict, path: Path) -> None:
         "",
         "## Per sample",
         "",
-        "| Sample | Cues | Contract | Quality | Risky | Semantic err | CPS post |",
-        "|--------|------|----------|---------|-------|--------------|----------|",
+        "| Sample | Mode type | Contract | Quality | Risky | Semantic |",
+        "|--------|-----------|----------|---------|-------|----------|",
     ]
     for item in report.get("samples", []):
         if item.get("status") != "ok":
             lines.append(
-                f"| {item['id']} | — | **{item['status']}** | — | — | — | — |"
+                f"| {item['id']} | — | **{item['status']}** | — | — | — |"
             )
             continue
         m = item["metrics"]
+        bm = item.get("benchmark_mode", {})
         lines.append(
-            f"| {item['id']} | {m.get('source_cue_count')} | "
+            f"| {item['id']} | {bm.get('mode_type', '—')} | "
             f"{m.get('pipeline_contract_status')} | {m.get('quality_score')} | "
-            f"{m.get('risky_cue_count')} | {m.get('semantic_alignment_errors')} | "
-            f"{m.get('cps_error_count_post_timing')} |"
+            f"{m.get('risky_cue_count')} | {m.get('semantic_alignment_errors')} |"
         )
     lines.extend(["", "## Deferred", ""])
     for d in report.get("deferred", []):
@@ -179,91 +247,84 @@ def _write_summary(report: dict, path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def main() -> int:
+def _run_benchmark_pass(
+    samples: List[dict],
+    jobs_root: Path,
+    out_root: Path,
+    flags: BenchmarkFlags,
+    *,
+    pass_name: str,
+    pass_flags: BenchmarkFlags,
+) -> Tuple[dict, int]:
     import os
 
-    manifest = _load_manifest()
-    jobs_root = Path(manifest["jobs_root"])
-    only = None
-    requested_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
-    if "--engine" in sys.argv:
-        idx = sys.argv.index("--engine")
-        if idx + 1 < len(sys.argv):
-            requested_engine = sys.argv[idx + 1].strip().lower()
-    if "--sample" in sys.argv:
-        idx = sys.argv.index("--sample")
-        if idx + 1 < len(sys.argv):
-            only = sys.argv[idx + 1]
-
-    from auto_subtitle.config import SUPPORTED_TRANSLATION_ENGINES
-
-    if requested_engine not in SUPPORTED_TRANSLATION_ENGINES:
-        print(f"Unsupported engine: {requested_engine}", file=sys.stderr)
-        return 1
-    os.environ["TRANSLATION_ENGINE"] = requested_engine
-    env_engine = os.getenv("TRANSLATION_ENGINE", "openai").strip().lower()
-
-    samples: List[dict] = manifest["samples"]
-    if only:
-        samples = [s for s in samples if s["id"] == only]
-        if not samples:
-            print(f"Unknown sample id: {only}", file=sys.stderr)
-            return 1
-
-    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ["TRANSLATION_ENGINE"] = flags.requested_engine
     results: List[dict] = []
     engine_samples: List[dict] = []
     engine_valid = True
 
     for sample in samples:
         sid = sample["id"]
-        out_dir = OUT_ROOT / sid
-        reuse_raw = bool(sample.get("reuse_raw"))
+        out_dir = out_root / sid
         print(
-            f"\n[Benchmark] === {sid} ({sample.get('cue_count')} cues) "
-            f"engine={requested_engine} reuse_raw={reuse_raw} ==="
+            f"\n[Benchmark:{pass_name}] === {sid} ({sample.get('cue_count')} cues) "
+            f"engine={pass_flags.requested_engine} ==="
         )
-        source = _prepare_sample_debug(
-            sample,
-            jobs_root,
-            out_dir,
-            reuse_raw=reuse_raw,
+        source, reuse_raw, used_raw_cache, cache_key = _prepare_sample_debug(
+            sample, jobs_root, out_dir, flags=pass_flags
         )
         if source is None:
             print(f"[Benchmark] SKIP {sid}: missing source.srt")
             results.append({"id": sid, "status": "missing_source", "job_id": sample["job_id"]})
             continue
 
+        mode_type = mode_type_for(
+            reuse_raw=reuse_raw,
+            used_raw_cache=used_raw_cache,
+            fresh_translate=not reuse_raw,
+        )
+        mode = "error"
+        effective = pass_flags.requested_engine
         t0 = time.time()
         try:
             run_meta = _run_pipeline_stages(
                 out_dir,
                 job_source=source,
                 reuse_raw=reuse_raw,
-                translation_engine=requested_engine,
+                translation_engine=pass_flags.requested_engine,
             )
             _build_reports(out_dir, run_meta)
             metrics = _sample_result(out_dir)
+
+            if pass_flags.cache_raw and not used_raw_cache:
+                vi_raw = out_dir / "vi_raw.srt"
+                if vi_raw.exists():
+                    save_cached_vi_raw(
+                        sid,
+                        source,
+                        pass_flags.requested_engine,
+                        vi_raw,
+                        extra={"benchmark_pass": pass_name},
+                    )
+                    if not cache_key:
+                        cache_key = raw_cache_key(source, pass_flags.requested_engine)
+
             mode = run_meta.get("translation_mode", "fresh_translate")
-            effective = run_meta.get("translation_engine_effective", requested_engine)
-            is_valid = (
-                mode == "reuse_raw"
-                or effective == requested_engine
-            )
+            effective = run_meta.get("translation_engine_effective", pass_flags.requested_engine)
+            is_valid = mode in ("reuse_raw", "cached_raw") or effective == pass_flags.requested_engine
             if not is_valid:
                 engine_valid = False
             engine_samples.append(
                 {
                     "sample": sid,
                     "mode": mode,
-                    "translation_engine_requested": requested_engine,
+                    "mode_type": mode_type,
+                    "translation_engine_requested": pass_flags.requested_engine,
                     "translation_engine_effective": effective,
+                    "raw_translation_cache_key": cache_key,
+                    "raw_translation_cached": used_raw_cache or pass_flags.cache_raw,
                     "is_valid": is_valid,
                 }
-            )
-            print(
-                f"[Benchmark] {sid} engine: requested={requested_engine} "
-                f"effective={effective} mode={mode}"
             )
             status = "ok"
             if metrics.get("pipeline_contract_status") != "pass":
@@ -272,36 +333,53 @@ def main() -> int:
             metrics = {"error": str(exc)}
             status = "error"
             print(f"[Benchmark] ERROR {sid}: {exc}")
+            mode_type = "unknown"
+            cache_key = None
 
         elapsed = round(time.time() - t0, 1)
+        benchmark_mode_meta = {
+            "mode": mode if status == "ok" else "error",
+            "mode_type": mode_type,
+            "translation_engine_requested": pass_flags.requested_engine,
+            "translation_engine_effective": (
+                effective if status == "ok" else pass_flags.requested_engine
+            ),
+            "raw_translation_cache_key": cache_key,
+            "raw_translation_cached": used_raw_cache,
+            "score_interpretation": score_interpretation(mode_type),
+        }
         entry = {
             "id": sid,
             "job_id": sample["job_id"],
             "status": status,
             "elapsed_seconds": elapsed,
             "metrics": metrics,
+            "benchmark_mode": benchmark_mode_meta,
             "artifact_dir": str(out_dir),
         }
         results.append(entry)
         if status == "ok":
             print(
-                f"[Benchmark] {sid}: contract={metrics.get('pipeline_contract_status')} "
+                f"[Benchmark:{pass_name}] {sid}: mode_type={mode_type} "
                 f"quality={metrics.get('quality_score')} "
-                f"risky={metrics.get('risky_cue_count')} "
-                f"semantic={metrics.get('semantic_alignment_errors')} "
-                f"({elapsed}s)"
+                f"semantic={metrics.get('semantic_alignment_errors')} ({elapsed}s)"
             )
 
     ok = [r for r in results if r.get("status") == "ok"]
-    scores = [r["metrics"]["quality_score"] for r in ok if r["metrics"].get("quality_score") is not None]
+    scores = [
+        r["metrics"]["quality_score"]
+        for r in ok
+        if r["metrics"].get("quality_score") is not None
+    ]
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "translation_engine_requested": requested_engine,
-        "translation_engine_env": env_engine,
+        "benchmark_mode": pass_name,
+        "translation_engine_requested": pass_flags.requested_engine,
+        "translation_engine_env": os.getenv("TRANSLATION_ENGINE", "openai"),
         "benchmark_engine_status": "pass" if engine_valid else "invalid_engine_config",
         "manifest": str(MANIFEST),
         "samples": results,
-        "deferred": manifest.get("deferred", []),
+        "deferred": _load_manifest().get("deferred", []),
         "aggregate": {
             "samples_run": len(results),
             "samples_ok": len(ok),
@@ -317,37 +395,170 @@ def main() -> int:
             "total_risky_cues": sum(r["metrics"].get("risky_cue_count") or 0 for r in ok),
         },
     }
+    return report, 0 if all(r.get("status") == "ok" for r in results) else 1
 
-    report_path = OUT_ROOT / "benchmark_report.json"
+
+def _write_artifacts(report: dict, out_root: Path, engine_samples: List[dict]) -> None:
+    out_root.mkdir(parents=True, exist_ok=True)
+    report_path = out_root / "benchmark_report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     engine_report = {
-        "requested_engine": requested_engine,
-        "env_translation_engine": env_engine,
+        "requested_engine": report.get("translation_engine_requested"),
+        "env_translation_engine": report.get("translation_engine_env"),
         "samples": engine_samples,
-        "benchmark_engine_status": "pass" if engine_valid else "invalid_engine_config",
+        "benchmark_engine_status": report.get("benchmark_engine_status"),
+        "benchmark_mode": report.get("benchmark_mode"),
     }
-    (OUT_ROOT / "engine_selection_report.json").write_text(
+    (out_root / "engine_selection_report.json").write_text(
         json.dumps(engine_report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    _write_summary(report, OUT_ROOT / "benchmark_summary.md")
+    _write_summary(report, out_root / "benchmark_summary.md")
 
+
+def _run_diagnosis_scripts() -> None:
     import subprocess
 
-    diag_script = ROOT / "scripts" / "build_cross_sample_diagnosis.py"
-    if diag_script.exists():
-        subprocess.run([sys.executable, str(diag_script)], check=False, cwd=str(ROOT))
+    for name in (
+        "build_cross_sample_diagnosis.py",
+        "build_cue_shift_diagnosis.py",
+        "build_no_rush_diagnosis.py",
+        "build_outsider_diagnosis.py",
+    ):
+        script = ROOT / "scripts" / name
+        if script.exists():
+            subprocess.run([sys.executable, str(script)], check=False, cwd=str(ROOT))
 
-    shift_script = ROOT / "scripts" / "build_cue_shift_diagnosis.py"
-    if shift_script.exists():
-        subprocess.run([sys.executable, str(shift_script)], check=False, cwd=str(ROOT))
 
-    no_rush_script = ROOT / "scripts" / "build_no_rush_diagnosis.py"
-    if no_rush_script.exists():
-        subprocess.run([sys.executable, str(no_rush_script)], check=False, cwd=str(ROOT))
+def main() -> int:
+    import os
 
-    print(f"\n[Benchmark] Done → {report_path}")
-    return 0 if all(r.get("status") == "ok" for r in results) else 1
+    flags = _parse_flags(sys.argv)
+    from auto_subtitle.config import SUPPORTED_TRANSLATION_ENGINES
+
+    if flags.requested_engine not in SUPPORTED_TRANSLATION_ENGINES:
+        print(f"Unsupported engine: {flags.requested_engine}", file=sys.stderr)
+        return 1
+
+    manifest = _load_manifest()
+    jobs_root = Path(manifest["jobs_root"])
+    samples: List[dict] = manifest["samples"]
+    if flags.only_sample:
+        samples = [s for s in samples if s["id"] == flags.only_sample]
+        if not samples:
+            print(f"Unknown sample id: {flags.only_sample}", file=sys.stderr)
+            return 1
+
+    exit_code = 0
+    engine_samples_all: List[dict] = []
+
+    if flags.benchmark_mode in ("both", "end_to_end"):
+        ef = BenchmarkFlags(
+            requested_engine=flags.requested_engine,
+            force_fresh=True,
+            cache_raw=True,
+            only_sample=flags.only_sample,
+        )
+        e2e_root = OUT_ROOT / "end_to_end"
+        report, code = _run_benchmark_pass(
+            samples, jobs_root, e2e_root, flags, pass_name="end_to_end", pass_flags=ef
+        )
+        _write_artifacts(report, e2e_root, [])
+        exit_code = max(exit_code, code)
+
+    if flags.benchmark_mode in ("both", "pipeline_regression"):
+        pf = BenchmarkFlags(
+            requested_engine=flags.requested_engine,
+            use_raw_cache=True,
+            reuse_raw_manifest=True,
+            only_sample=flags.only_sample,
+        )
+        pr_root = OUT_ROOT / "pipeline_regression"
+        report, code = _run_benchmark_pass(
+            samples, jobs_root, pr_root, flags, pass_name="pipeline_regression", pass_flags=pf
+        )
+        engine_samples_all = [
+            s for item in report.get("samples", []) for s in [{}]
+        ]
+        # collect engine samples from pass - re-read from report samples
+        for item in report.get("samples", []):
+            bm = item.get("benchmark_mode", {})
+            engine_samples_all.append(
+                {
+                    "sample": item["id"],
+                    "mode": bm.get("mode"),
+                    "mode_type": bm.get("mode_type"),
+                    "translation_engine_requested": flags.requested_engine,
+                    "translation_engine_effective": bm.get("translation_engine_effective"),
+                    "raw_translation_cache_key": bm.get("raw_translation_cache_key"),
+                    "raw_translation_cached": bm.get("raw_translation_cached"),
+                    "is_valid": True,
+                }
+            )
+        _write_artifacts(report, pr_root, engine_samples_all)
+        shutil.copy2(pr_root / "benchmark_report.json", OUT_ROOT / "benchmark_report.json")
+        shutil.copy2(pr_root / "benchmark_summary.md", OUT_ROOT / "benchmark_summary.md")
+        shutil.copy2(
+            pr_root / "engine_selection_report.json", OUT_ROOT / "engine_selection_report.json"
+        )
+        for sid in [s["id"] for s in samples]:
+            src = pr_root / sid
+            dst = OUT_ROOT / sid
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+        exit_code = max(exit_code, code)
+
+    if flags.benchmark_mode == "end_to_end":
+        shutil.copy2(e2e_root / "benchmark_report.json", OUT_ROOT / "benchmark_report.json")
+        shutil.copy2(e2e_root / "benchmark_summary.md", OUT_ROOT / "benchmark_summary.md")
+        for sid in [s["id"] for s in samples]:
+            src = e2e_root / sid
+            dst = OUT_ROOT / sid
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+
+    if flags.benchmark_mode == "default":
+        pass_flags = BenchmarkFlags(
+            requested_engine=flags.requested_engine,
+            force_fresh=flags.force_fresh,
+            reuse_raw_manifest=flags.reuse_raw_manifest,
+            cache_raw=flags.cache_raw,
+            use_raw_cache=flags.use_raw_cache,
+            only_sample=flags.only_sample,
+        )
+        report, code = _run_benchmark_pass(
+            samples,
+            jobs_root,
+            OUT_ROOT,
+            flags,
+            pass_name="default",
+            pass_flags=pass_flags,
+        )
+        engine_samples_all = []
+        for item in report.get("samples", []):
+            bm = item.get("benchmark_mode", {})
+            engine_samples_all.append(
+                {
+                    "sample": item["id"],
+                    "mode": bm.get("mode"),
+                    "mode_type": bm.get("mode_type"),
+                    "translation_engine_requested": flags.requested_engine,
+                    "translation_engine_effective": bm.get("translation_engine_effective"),
+                    "raw_translation_cache_key": bm.get("raw_translation_cache_key"),
+                    "raw_translation_cached": bm.get("raw_translation_cached"),
+                    "is_valid": True,
+                }
+            )
+        _write_artifacts(report, OUT_ROOT, engine_samples_all)
+        exit_code = max(exit_code, code)
+
+    _run_diagnosis_scripts()
+    print(f"\n[Benchmark] Done → {OUT_ROOT / 'benchmark_report.json'}")
+    return exit_code
 
 
 if __name__ == "__main__":

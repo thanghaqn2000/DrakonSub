@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .meaning_unit_builder import build_meaning_units
-from .semantic_alignment_guard import analyze_semantic_alignment, detect_repeated_meaning
+from .semantic_alignment_guard import (
+    analyze_semantic_alignment,
+    detect_repeated_meaning,
+    _content_absorbed_in_previous_cue,
+)
 from .subtitle_timing_optimizer import _parse_ts
 from .translation_error_taxonomy import ERROR_TYPES, get_error_type
 from .vi_compression import _cps
@@ -331,6 +335,18 @@ def analyze_translation_quality(
         source_risks, detected_errors = _detect_cue_assessment(
             i, src, vi, vi_e, meaning_units, video_context
         )
+        if _content_absorbed_in_previous_cue(i, source_texts, vi_texts, video_context):
+            detected_errors = [
+                e
+                for e in detected_errors
+                if e
+                not in (
+                    "cue_flow_error",
+                    "semantic_drift_error",
+                    "semantic_alignment_error",
+                    "missing_or_empty_cue_error",
+                )
+            ]
         alignment_warnings: List[str] = []
         for eid in alignment_by_cue.get(i, []):
             if eid not in detected_errors:

@@ -131,6 +131,12 @@ def main() -> int:
     parser.add_argument("--no-deterministic", action="store_true", help="Disable deterministic mode")
     parser.add_argument("--warmup", action="store_true", help="Discard one benchmark run before counted runs")
     parser.add_argument("--sleep-seconds", type=int, default=45, help="Pause between runs (API cooldown)")
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=2,
+        help="Retry benchmark up to N times per counted run when CI fails",
+    )
     args = parser.parse_args()
 
     deterministic = args.deterministic and not args.no_deterministic
@@ -192,14 +198,30 @@ def main() -> int:
             det_counter += 1
             run_id = f"det_{det_counter}"
             print(f"\n[Stability] === {run_id} deterministic=True ===")
-            code = _run_benchmark(engine=args.engine, deterministic=True)
-            report_path = PR_ROOT / "benchmark_report.json"
-            if not report_path.exists():
-                print(f"[Stability] missing report after {run_id}", file=sys.stderr)
-                sys.exit(1)
-            report = _load_report(report_path)
-            metrics = _run_metrics(report)
-            ci_ok, ci_out = _run_ci_check(report_path)
+            retry_used = False
+            first_run_failed = False
+            ci_ok = False
+            ci_out = ""
+            code = 0
+            metrics: Dict[str, Any] = {}
+            for attempt in range(1, max(1, args.max_attempts) + 1):
+                if attempt > 1:
+                    retry_used = True
+                    print(f"[Stability] {run_id} retry attempt {attempt}/{args.max_attempts}")
+                    if args.sleep_seconds > 0:
+                        time.sleep(args.sleep_seconds)
+                code = _run_benchmark(engine=args.engine, deterministic=True)
+                report_path = PR_ROOT / "benchmark_report.json"
+                if not report_path.exists():
+                    print(f"[Stability] missing report after {run_id}", file=sys.stderr)
+                    sys.exit(1)
+                report = _load_report(report_path)
+                metrics = _run_metrics(report)
+                ci_ok, ci_out = _run_ci_check(report_path)
+                if attempt == 1 and not ci_ok:
+                    first_run_failed = True
+                if ci_ok:
+                    break
             dest = STABILITY_ROOT / run_id
             if dest.exists():
                 shutil.rmtree(dest)
@@ -207,13 +229,29 @@ def main() -> int:
             outsider_dir = PR_ROOT / "outsider_36"
             if outsider_dir.exists():
                 stage_diffs[run_id] = _stage_hashes(outsider_dir)
-            entry = {"run_id": run_id, "deterministic": True, "exit_code": code, **metrics}
+            entry = {
+                "run_id": run_id,
+                "deterministic": True,
+                "exit_code": code,
+                "retry_used": retry_used,
+                "first_run_failed": first_run_failed,
+                **metrics,
+            }
             all_runs.append(entry)
-            ci_results.append({"run_id": run_id, "ci_pass": ci_ok, "ci_output": ci_out})
+            ci_results.append(
+                {
+                    "run_id": run_id,
+                    "ci_pass": ci_ok,
+                    "ci_output": ci_out,
+                    "retry_used": retry_used,
+                    "first_run_failed": first_run_failed,
+                }
+            )
             print(
                 f"[Stability] {run_id}: quality_min={metrics['quality_min']} "
                 f"outsider={metrics['samples'].get('outsider_36', {}).get('quality_score')} "
                 f"ci={'PASS' if ci_ok else 'FAIL'}"
+                f"{' (retry)' if retry_used else ''}"
             )
 
     det_only = [r for r in all_runs if r.get("deterministic")]

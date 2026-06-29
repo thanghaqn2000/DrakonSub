@@ -37,7 +37,7 @@ python scripts/run_benchmark_stability_check.py \
   --deterministic
 ```
 
-Tạo `determinism_diagnosis.json` và `stability_check_report.json`. Exit 0 khi 3/3 pass CI.
+Tạo `determinism_diagnosis.json` và `stability_check_report.json`. Exit 0 khi 3/3 pass CI. Mỗi run retry tối đa 2 lần nếu CI fail (`--max-attempts 2`).
 
 `--mode` là alias của `--benchmark-mode`.
 

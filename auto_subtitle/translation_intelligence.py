@@ -12,6 +12,11 @@ from .meaning_unit_builder import build_meaning_units, save_meaning_units
 from .semantic_alignment_guard import analyze_semantic_alignment, save_alignment_report
 from .translation_error_taxonomy import get_error_type
 from .translation_quality_analyzer import analyze_translation_quality, save_quality_report
+from .cps_diagnosis import (
+    build_cps_diagnosis_report,
+    merge_delivery_quality_report,
+    save_cps_diagnosis_report,
+)
 from .repair_unit_selector import select_units_for_repair
 from .unit_repair_redistributor import (
     apply_unit_rewrite_repairs,
@@ -552,3 +557,46 @@ def run_post_translation_qa(
         print("[Translation Intelligence] Human review recommended for some cues")
 
     return repaired, combined_report
+
+
+def finalize_delivery_quality_report(
+    source_entries: List[dict],
+    pre_timing_entries: List[dict],
+    post_timing_entries: List[dict],
+    intel_ctx: TranslationIntelligenceContext,
+    pre_timing_report: Dict[str, Any],
+    debug_dir: str,
+) -> Dict[str, Any]:
+    """
+    Re-score delivery subtitles after timing-only stage and emit CPS diagnosis.
+
+    Viewer-facing quality uses post-timing entries; pre-timing CPS warnings that
+    timing resolves are documented in cps_diagnosis_report.json.
+    """
+    out = Path(debug_dir)
+    cps_report = build_cps_diagnosis_report(
+        source_entries,
+        pre_timing_entries,
+        post_timing_entries,
+        intel_ctx.meaning_units,
+        intel_ctx.video_context,
+    )
+    save_cps_diagnosis_report(out / "cps_diagnosis_report.json", cps_report)
+
+    post_timing_report = analyze_translation_quality(
+        source_entries,
+        post_timing_entries,
+        intel_ctx.video_context,
+        intel_ctx.meaning_units,
+    )
+    merged = merge_delivery_quality_report(
+        pre_timing_report, post_timing_report, cps_report
+    )
+  # CPS-only issues fixed by timing should not force human review.
+    if merged.get("summary", {}).get("confirmed_error_counts") == {}:
+        merged["human_review_needed"] = bool(
+            merged.get("semantic_alignment", {}).get("alignment_error_count", 0)
+            or merged.get("asr_risks", {}).get("unresolved_cue_count", 0)
+        )
+    save_quality_report(out / "translation_quality_report.json", merged)
+    return merged

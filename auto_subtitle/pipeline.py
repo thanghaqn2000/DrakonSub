@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import tempfile
@@ -376,6 +377,21 @@ def _run_en_vi_pipeline(
 
     shutil.copy2(working_path, artifact / "vi_after_timing.srt")
     shutil.copy2(working_path, artifact / "final_vi.srt")
+
+    if intel_ctx is not None and translation_intelligence_enabled():
+        qa_path = debug_dir / "translation_quality_report.json"
+        if qa_path.exists():
+            from .translation_intelligence import finalize_delivery_quality_report
+
+            pre_report = json.loads(qa_path.read_text(encoding="utf-8"))
+            finalize_delivery_quality_report(
+                source_entries,
+                pre_timing_hash_entries,
+                post_timing_entries,
+                intel_ctx,
+                pre_report,
+                str(debug_dir),
+            )
 
     stage_counts = count_stage_artifacts(artifact)
     report = build_pipeline_contract_report(

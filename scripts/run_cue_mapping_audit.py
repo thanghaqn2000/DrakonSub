@@ -43,6 +43,7 @@ from auto_subtitle.subtitle_timing_optimizer import (  # noqa: E402
 )
 from auto_subtitle.translation_intelligence import (  # noqa: E402
     TranslationIntelligenceContext,
+    finalize_delivery_quality_report,
     run_post_translation_qa,
     run_pre_translation_intelligence,
 )
@@ -384,9 +385,10 @@ def _run_pipeline_stages(debug: Path, *, reuse_raw: bool = False) -> Dict[str, A
         "cue_count": len(_load_srt(working)),
     }
 
+    qa_report: Optional[Dict[str, Any]] = None
     if intel_ctx is not None:
         try:
-            repaired, _qa = run_post_translation_qa(
+            repaired, qa_report = run_post_translation_qa(
                 source_entries,
                 _load_srt(working),
                 intel_ctx,
@@ -427,6 +429,20 @@ def _run_pipeline_stages(debug: Path, *, reuse_raw: bool = False) -> Dict[str, A
         "path": str(final_path),
         "cue_count": len(_load_srt(final_path)),
     }
+
+    if intel_ctx is not None and qa_report is not None:
+        try:
+            finalize_delivery_quality_report(
+                source_entries,
+                pre_timing_entries,
+                post_timing_entries,
+                intel_ctx,
+                qa_report,
+                str(debug),
+            )
+            meta["notes"].append("Final delivery QA + cps_diagnosis_report generated")
+        except Exception as exc:
+            meta["notes"].append(f"delivery QA finalize failed: {exc}")
 
     stage_counts = count_stage_artifacts(debug)
     contract_report = build_pipeline_contract_report(

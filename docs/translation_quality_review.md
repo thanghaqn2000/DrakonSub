@@ -22,6 +22,16 @@ python scripts/export_translation_quality_review.py \
 python scripts/export_translation_quality_review.py --engine openai --both-modes --use-raw-cache
 ```
 
+## SA review slice (32 cues)
+
+```bash
+python scripts/build_sa_review_slice.py
+```
+
+Output: `artifacts/translation_quality_review/sa_review_slice_v1.{md,csv,json}`
+
+### Cả hai mode
+
 ## Output
 
 ```

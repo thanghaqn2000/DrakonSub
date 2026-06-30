@@ -676,6 +676,7 @@ def edit_vi_srt_file(
     topic: Optional[str] = None,
     on_progress=None,
     debug_dir: Optional[str] = None,
+    translation_context: Optional[dict] = None,
 ) -> str:
     """Read source + raw VI SRT files, run editor pass, write *output_srt_path*."""
     from .utils import parse_srt, write_srt_entries

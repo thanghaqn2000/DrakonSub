@@ -412,11 +412,6 @@ def optimize_vietnamese_subtitle_readability(
 # Public API — file level
 # ---------------------------------------------------------------------------
 
-def _readability_artifact_path(env_key: str) -> Optional[str]:
-    raw = os.getenv(env_key, "").strip()
-    return raw or None
-
-
 def _persist_readability_artifact(src_path: str, dest_path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
     shutil.copy2(src_path, dest_path)
@@ -427,6 +422,9 @@ def optimize_readability_file(
     output_srt_path: Optional[str] = None,
     config: Optional[ReadabilityConfig] = None,
     on_progress=None,
+    *,
+    before_artifact_path: Optional[str] = None,
+    after_artifact_path: Optional[str] = None,
 ) -> str:
     """
     Apply readability optimisation to an SRT file.
@@ -434,23 +432,21 @@ def optimize_readability_file(
     If *output_srt_path* is ``None``, the input file is replaced in-place
     using an atomic temp-file swap.  Returns the path of the written file.
 
-    Optional debug artifacts (env):
-      DRAKONSUB_VI_BEFORE_READABILITY_SRT  copy input before processing
-      DRAKONSUB_VI_AFTER_READABILITY_SRT   copy output after processing
+    Optional debug artifacts:
+      before_artifact_path  copy input before processing
+      after_artifact_path   copy output after processing
     """
     from .utils import parse_srt, write_srt_entries
 
     if config is None:
         config = load_readability_config()
 
-    before_artifact = _readability_artifact_path("DRAKONSUB_VI_BEFORE_READABILITY_SRT")
-    after_artifact = _readability_artifact_path("DRAKONSUB_VI_AFTER_READABILITY_SRT")
-    if before_artifact:
-        _persist_readability_artifact(input_srt_path, before_artifact)
+    if before_artifact_path:
+        _persist_readability_artifact(input_srt_path, before_artifact_path)
 
     if not config.enabled:
-        if after_artifact:
-            _persist_readability_artifact(input_srt_path, after_artifact)
+        if after_artifact_path:
+            _persist_readability_artifact(input_srt_path, after_artifact_path)
         return input_srt_path
 
     with open(input_srt_path, encoding="utf-8") as f:
@@ -466,8 +462,8 @@ def optimize_readability_file(
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 write_srt_entries(optimized, file=f)
-            if after_artifact:
-                _persist_readability_artifact(tmp_path, after_artifact)
+            if after_artifact_path:
+                _persist_readability_artifact(tmp_path, after_artifact_path)
             os.replace(tmp_path, input_srt_path)
         except Exception:
             if os.path.exists(tmp_path):
@@ -477,6 +473,6 @@ def optimize_readability_file(
 
     with open(output_srt_path, "w", encoding="utf-8") as f:
         write_srt_entries(optimized, file=f)
-    if after_artifact:
-        _persist_readability_artifact(output_srt_path, after_artifact)
+    if after_artifact_path:
+        _persist_readability_artifact(output_srt_path, after_artifact_path)
     return output_srt_path

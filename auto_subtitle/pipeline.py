@@ -346,13 +346,11 @@ def _run_en_vi_pipeline(
     from .subtitle_readability_optimizer import optimize_readability_file
 
     _report(on_progress, "Optimising subtitle readability...", 68)
-    os.environ["DRAKONSUB_VI_BEFORE_READABILITY_SRT"] = str(
-        artifact / "vi_before_readability.srt"
+    optimize_readability_file(
+        working_path,
+        before_artifact_path=str(artifact / "vi_before_readability.srt"),
+        after_artifact_path=str(artifact / "vi_after_readability.srt"),
     )
-    os.environ["DRAKONSUB_VI_AFTER_READABILITY_SRT"] = str(
-        artifact / "vi_after_readability.srt"
-    )
-    optimize_readability_file(working_path)
     shutil.copy2(working_path, artifact / "vi_after_readability.srt")
 
     # --- Final semantic QA / repair (end of semantic pipeline) ---
@@ -659,8 +657,6 @@ def generate_vietsub(
 
     if config.source_language == "vi":
         _report(on_progress, "Optimising subtitle readability...", 68)
-        os.environ.pop("DRAKONSUB_VI_BEFORE_READABILITY_SRT", None)
-        os.environ.pop("DRAKONSUB_VI_AFTER_READABILITY_SRT", None)
         optimize_readability_file(final_srt)
 
         from .subtitle_timing_optimizer import (

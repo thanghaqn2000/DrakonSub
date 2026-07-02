@@ -516,6 +516,10 @@ def _call_openai_translate(
     all_texts: Optional[List[str]] = None,
     durations: Optional[List[float]] = None,
     local_indices: Optional[List[int]] = None,
+    *,
+    translation_context: Optional[dict] = None,
+    non_empty_indices: Optional[List[int]] = None,
+    strict_cue_count: bool = False,
 ) -> List[str]:
     """Per-cue or small-list fallback using context-aware indexed JSON output."""
     if all_texts is not None and local_indices is not None:
@@ -655,6 +659,9 @@ def _translate_batch_with_retry(
                         all_texts=all_texts,
                         durations=durations,
                         local_indices=[local_idx],
+                        translation_context=translation_context,
+                        non_empty_indices=non_empty_indices,
+                        strict_cue_count=strict_cue_count,
                     )
                     results.extend(per_cue)
                 except Exception:

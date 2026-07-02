@@ -452,9 +452,11 @@ def _run_pipeline_stages(
     else:
         meta["notes"].append("VI flow disabled")
 
-    os.environ["DRAKONSUB_VI_BEFORE_READABILITY_SRT"] = str(debug / "vi_before_readability.srt")
-    os.environ["DRAKONSUB_VI_AFTER_READABILITY_SRT"] = str(debug / "vi_after_readability.srt")
-    optimize_readability_file(str(working))
+    optimize_readability_file(
+        str(working),
+        before_artifact_path=str(debug / "vi_before_readability.srt"),
+        after_artifact_path=str(debug / "vi_after_readability.srt"),
+    )
     shutil.copy2(working, debug / "vi_after_readability.srt")
     meta["stages"]["vi_after_readability"] = {
         "path": str(debug / "vi_after_readability.srt"),

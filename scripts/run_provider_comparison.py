@@ -79,15 +79,16 @@ def run_provider(provider: str, engine: str) -> dict:
     stages["raw_translation"] = provider_dir / f"{prefix}_raw_translation.srt"
     shutil.copy2(working, stages["raw_translation"])
 
+    stages["after_editor"] = provider_dir / f"{prefix}_after_editor.srt"
     edit_vi_srt_file(
         str(source),
         str(working),
-        str(provider_dir / f"{prefix}_after_editor.srt"),
+        str(stages["after_editor"]),
         translation_engine=engine,
         topic=config.translation_topic,
         debug_dir=str(provider_dir),
     )
-    shutil.copy2(working, stages.setdefault("after_editor", provider_dir / f"{prefix}_after_editor.srt"))
+    shutil.copy2(stages["after_editor"], working)
 
     compress_vi_srt_file(str(working))
     stages["after_compression"] = provider_dir / f"{prefix}_after_compression.srt"

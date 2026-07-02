@@ -73,14 +73,11 @@ def _run_branch(
     os.environ["ENABLE_VI_READABILITY_OPTIMIZER"] = (
         "true" if readability_enabled else "false"
     )
-    os.environ["DRAKONSUB_VI_BEFORE_READABILITY_SRT"] = str(
-        branch / "vi_before_readability.srt"
+    optimize_readability_file(
+        str(working),
+        before_artifact_path=str(branch / "vi_before_readability.srt"),
+        after_artifact_path=str(branch / "vi_after_readability.srt"),
     )
-    os.environ["DRAKONSUB_VI_AFTER_READABILITY_SRT"] = str(
-        branch / "vi_after_readability.srt"
-    )
-
-    optimize_readability_file(str(working))
     optimize_srt_timing_file(str(working))
     shutil.copy2(working, branch / "vi_final.srt")
 

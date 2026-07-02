@@ -24,3 +24,14 @@ env/
 *.mp4
 *.srt
 *.wav
+!tests/fixtures/**/*.srt
+
+# Local debug & benchmark artifacts (keep scripts/benchmark_samples.json + docs)
+debug/
+artifacts/multi_sample_benchmark/
+artifacts/translation_quality_review/
+
+# SA bridge runtime (config.json is committed)
+.sa_bridge/state.json
+.sa_bridge/last_sa_response.md
+.sa_bridge/*.log

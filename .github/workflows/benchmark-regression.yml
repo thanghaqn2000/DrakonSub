@@ -1,0 +1,44 @@
+name: Benchmark Regression
+
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  regression-smoke:
+    name: CI regression check (golden)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Validate guardrails against golden report
+        run: |
+          python scripts/ci_regression_check.py \
+            --report tests/fixtures/golden/pipeline_regression_benchmark_report.json
+
+  benchmark-full:
+    name: Full pipeline regression (optional)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run pipeline regression
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY not set — skipping full benchmark"
+            exit 0
+          fi
+          echo "::warning::Full benchmark needs local drakonsub job fixtures (jobs_root). Run locally per docs/benchmark.md"
+          exit 0

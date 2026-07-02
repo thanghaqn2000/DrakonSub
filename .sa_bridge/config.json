@@ -1,0 +1,8 @@
+{
+  "chatgpt_url": "https://chatgpt.com/c/6a34da2f-a958-83ec-94fa-ea9b755fb812",
+  "chat_title_hint": "Lập kế hoạch với AI",
+  "max_poll_attempts": 120,
+  "poll_stable_reads": 2,
+  "poll_interval_seconds": 3,
+  "sa_done_markers": ["DONE", "DONE.", ": DONE", "xác nhận: DONE", "Phase: DONE"]
+}

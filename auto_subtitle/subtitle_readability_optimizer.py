@@ -20,6 +20,7 @@ Config (env variables, all optional):
 import json
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -219,7 +220,7 @@ def _openai_rewrite_batch(
     import os
     from openai import OpenAI
 
-    from .config import get_openai_model
+    from .config import get_openai_model, llm_chat_kwargs, llm_temperature
     from .openai_chat import create_chat_completion
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -250,8 +251,9 @@ def _openai_rewrite_batch(
                 {"role": "system", "content": _OPENAI_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
+            temperature=llm_temperature(0.3),
             response_format={"type": "json_object"},
+            **llm_chat_kwargs(),
         )
         content = (response.choices[0].message.content or "").strip()
         if content.startswith("```"):
@@ -410,24 +412,41 @@ def optimize_vietnamese_subtitle_readability(
 # Public API — file level
 # ---------------------------------------------------------------------------
 
+def _persist_readability_artifact(src_path: str, dest_path: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+    shutil.copy2(src_path, dest_path)
+
+
 def optimize_readability_file(
     input_srt_path: str,
     output_srt_path: Optional[str] = None,
     config: Optional[ReadabilityConfig] = None,
     on_progress=None,
+    *,
+    before_artifact_path: Optional[str] = None,
+    after_artifact_path: Optional[str] = None,
 ) -> str:
     """
     Apply readability optimisation to an SRT file.
 
     If *output_srt_path* is ``None``, the input file is replaced in-place
     using an atomic temp-file swap.  Returns the path of the written file.
+
+    Optional debug artifacts:
+      before_artifact_path  copy input before processing
+      after_artifact_path   copy output after processing
     """
     from .utils import parse_srt, write_srt_entries
 
     if config is None:
         config = load_readability_config()
 
+    if before_artifact_path:
+        _persist_readability_artifact(input_srt_path, before_artifact_path)
+
     if not config.enabled:
+        if after_artifact_path:
+            _persist_readability_artifact(input_srt_path, after_artifact_path)
         return input_srt_path
 
     with open(input_srt_path, encoding="utf-8") as f:
@@ -443,6 +462,8 @@ def optimize_readability_file(
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 write_srt_entries(optimized, file=f)
+            if after_artifact_path:
+                _persist_readability_artifact(tmp_path, after_artifact_path)
             os.replace(tmp_path, input_srt_path)
         except Exception:
             if os.path.exists(tmp_path):
@@ -452,4 +473,6 @@ def optimize_readability_file(
 
     with open(output_srt_path, "w", encoding="utf-8") as f:
         write_srt_entries(optimized, file=f)
+    if after_artifact_path:
+        _persist_readability_artifact(output_srt_path, after_artifact_path)
     return output_srt_path

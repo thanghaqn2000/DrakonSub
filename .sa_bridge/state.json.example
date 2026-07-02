@@ -1,0 +1,8 @@
+{
+  "loop_active": false,
+  "status": "idle",
+  "phase": "",
+  "poll_attempts": 0,
+  "assistant_count_at_send": 0,
+  "last_message_len_at_send": 0
+}

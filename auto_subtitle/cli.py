@@ -12,6 +12,7 @@ from .utils import (
     write_srt,
     parse_srt,
     write_srt_entries,
+    export_translation_ab_srt,
     translate_srt_entries,
     prepare_burn_subtitles,
     build_word_aligned_segments,
@@ -59,8 +60,10 @@ def main():
     parser.add_argument("--translate_to", type=str, default=None,
                         help="translate each subtitle segment to this language code (e.g. vi)")
     parser.add_argument("--translation_engine", type=str, default="openai",
-                        choices=["openai", "google"],
-                        help="translation backend: openai (natural Vietnamese) or google")
+                        choices=["openai", "gemini"],
+                        help="translation backend: openai or gemini")
+    parser.add_argument("--ab_test", type=str2bool, default=False,
+                        help="translate one source SRT with both engines and output vi_openai.srt + vi_gemini.srt")
     parser.add_argument(
         "--topic",
         type=normalize_topic,
@@ -100,6 +103,7 @@ def main():
     from_srt: str = args.pop("from_srt")
     translate_to: str = args.pop("translate_to")
     translation_engine: str = args.pop("translation_engine")
+    ab_test: bool = args.pop("ab_test")
     translation_topic: str = args.pop("topic")
     subtitle_margin_bottom: float = args.pop("subtitle_margin_bottom")
     subtitle_font_size: int = args.pop("subtitle_font_size")
@@ -113,6 +117,44 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     videos = args.pop("video")
+
+    if ab_test:
+        if len(videos) != 1:
+            parser.error("--ab_test supports exactly one input video")
+
+        if from_srt:
+            source_srt = from_srt
+        else:
+            if model_name.endswith(".en"):
+                warnings.warn(
+                    f"{model_name} is an English-only model, forcing English detection.")
+                args["language"] = "en"
+            elif language != "auto":
+                args["language"] = language
+
+            model = whisper.load_model(model_name)
+            audios = get_audio(videos)
+            subtitles = get_subtitles(
+                audios,
+                True,
+                output_dir,
+                lambda audio_path: model.transcribe(
+                    audio_path, word_timestamps=True, **args
+                ),
+            )
+            source_srt = subtitles[videos[0]]
+
+        target_lang = translate_to or "vi"
+        print(f"Running translation A/B test ({target_lang}) with OpenAI vs Gemini...")
+        outputs = export_translation_ab_srt(
+            srt_path=source_srt,
+            output_dir=output_dir,
+            target_lang=target_lang,
+            topic=translation_topic,
+        )
+        for engine, out_path in outputs.items():
+            print(f"Saved {engine} translation SRT: {os.path.abspath(out_path)}")
+        return
 
     if output_name and len(videos) != 1:
         parser.error("--output_name supports exactly one input video")
@@ -246,7 +288,7 @@ def maybe_translate_srt(
     if not translate_to:
         return srt_path
 
-    engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
+    engine_label = "OpenAI" if translation_engine == "openai" else "Gemini"
     print(f"Translating subtitles to {translate_to} via {engine_label}...")
     with open(srt_path, encoding="utf-8") as f:
         entries = parse_srt(f.read())
@@ -280,7 +322,7 @@ def apply_translation(
     output_suffix: str = "",
     translation_topic: str = DEFAULT_TOPIC,
 ) -> dict:
-    engine_label = "OpenAI" if translation_engine == "openai" else "Google Translate"
+    engine_label = "OpenAI" if translation_engine == "openai" else "Gemini"
     print(f"Translating subtitles to {translate_to} via {engine_label}...")
     with open(from_srt, encoding="utf-8") as f:
         entries = parse_srt(f.read())

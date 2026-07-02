@@ -1,0 +1,52 @@
+{
+  "detected_topic": "kinh tế",
+  "confidence": 0.9,
+  "audience_level": "general_beginner",
+  "translation_style": "tiếng Việt đơn giản, tự nhiên cho người lớn",
+  "tone": "trung lập",
+  "short_summary": "Người nói chia sẻ về hành trình khởi nghiệp, những khó khăn và cách đạt được thành công thông qua sự kiên trì và làm việc chăm chỉ.",
+  "key_terms": [
+    {
+      "source": "success",
+      "suggested_vi": "thành công",
+      "plain_explanation": "Kết quả tốt đẹp trong công việc hoặc dự án.",
+      "confidence": 0.9
+    },
+    {
+      "source": "AI",
+      "suggested_vi": "trí tuệ nhân tạo",
+      "plain_explanation": "Công nghệ giúp máy tính thực hiện các nhiệm vụ thông minh như con người.",
+      "confidence": 0.9
+    },
+    {
+      "source": "company",
+      "suggested_vi": "công ty",
+      "plain_explanation": "Tổ chức làm việc để sản xuất hàng hóa hoặc cung cấp dịch vụ.",
+      "confidence": 0.9
+    },
+    {
+      "source": "product",
+      "suggested_vi": "sản phẩm",
+      "plain_explanation": "Hàng hóa hoặc dịch vụ được tạo ra để bán.",
+      "confidence": 0.9
+    },
+    {
+      "source": "revenue",
+      "suggested_vi": "doanh thu",
+      "plain_explanation": "Tiền thu được từ việc bán hàng hóa hoặc dịch vụ.",
+      "confidence": 0.9
+    }
+  ],
+  "named_entities": [
+    "Tesla",
+    "Netscape",
+    "NASA"
+  ],
+  "possible_asr_risks": [
+    "'I was like' may be misheard; could be 'Tôi nghĩ rằng'."
+  ],
+  "translation_warnings": [
+    "Cẩn thận với các cụm từ có thể mang nghĩa bóng hoặc không rõ ràng.",
+    "Một số câu có thể bị cắt ngắn hoặc không hoàn chỉnh."
+  ]
+}

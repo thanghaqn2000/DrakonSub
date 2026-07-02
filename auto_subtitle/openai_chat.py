@@ -20,9 +20,15 @@ def create_chat_completion(
     messages: list,
     *,
     temperature: Optional[float] = None,
+    seed: Optional[int] = None,
+    top_p: Optional[float] = None,
     **kwargs: Any,
 ):
     params = {"model": model, "messages": messages, **kwargs}
     if temperature is not None and supports_custom_temperature(model):
         params["temperature"] = temperature
+    if seed is not None:
+        params["seed"] = seed
+    if top_p is not None:
+        params["top_p"] = top_p
     return client.chat.completions.create(**params)

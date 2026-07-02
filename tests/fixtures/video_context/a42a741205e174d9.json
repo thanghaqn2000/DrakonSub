@@ -1,0 +1,42 @@
+{
+  "detected_topic": "kinh tế",
+  "confidence": 0.9,
+  "audience_level": "general_beginner",
+  "translation_style": "tiếng Việt đơn giản, tự nhiên cho người lớn",
+  "tone": "thông thường",
+  "short_summary": "Bài nói đề cập đến việc tăng giá và sử dụng tiền để thúc đẩy doanh số, liên quan đến các hình thức hối lộ trong kinh doanh.",
+  "key_terms": [
+    {
+      "source": "bribe",
+      "suggested_vi": "hối lộ",
+      "plain_explanation": "hành động đưa tiền hoặc quà để ảnh hưởng đến quyết định của người khác",
+      "confidence": 0.8
+    },
+    {
+      "source": "title insurance",
+      "suggested_vi": "bảo hiểm quyền sở hữu",
+      "plain_explanation": "bảo hiểm bảo vệ quyền sở hữu tài sản",
+      "confidence": 0.7
+    },
+    {
+      "source": "mutual funds",
+      "suggested_vi": "quỹ tương hỗ",
+      "plain_explanation": "quỹ đầu tư tập hợp tiền của nhiều người để đầu tư vào cổ phiếu hoặc trái phiếu",
+      "confidence": 0.7
+    },
+    {
+      "source": "capitalistic life",
+      "suggested_vi": "cuộc sống tư bản",
+      "plain_explanation": "cuộc sống trong hệ thống kinh tế dựa trên sở hữu tư nhân và thị trường tự do",
+      "confidence": 0.6
+    }
+  ],
+  "named_entities": [],
+  "possible_asr_risks": [
+    "kissing cousin",
+    "load mutual funds"
+  ],
+  "translation_warnings": [
+    "Cẩn thận với các cụm từ có thể gây hiểu nhầm hoặc không rõ nghĩa."
+  ]
+}

@@ -1,0 +1,103 @@
+---
+description: SA (ChatGPT) ↔ Engineer autoloop — poll, send reports, continue without user wake
+alwaysApply: true
+---
+
+# SA ↔ Engineer Auto-Loop
+
+ChatGPT session = **SA**. Cursor agent = **Engineer**.
+
+Config: `.sa_bridge/config.json`  
+State: `.sa_bridge/state.json` (runtime, gitignored)  
+Control: `python3 scripts/sa_bridge_ctl.py <command>`
+
+## When to arm the loop
+
+At the start of any multi-step SA-driven work:
+
+```bash
+python3 scripts/sa_bridge_ctl.py arm --phase "multi-sample-benchmark" --note "optional"
+```
+
+## Standard cycle
+
+1. **Execute** SA task (code, tests, artifacts).
+2. **Send** `[ENGINEER REPORT — …]` to ChatGPT via browser CDP (see Send).
+3. **Record sent** (capture counts *before* waiting):
+
+```bash
+python3 scripts/sa_bridge_ctl.py note-sent --assistant-count <N> --message-len <last_len>
+```
+
+4. **Poll SA** until response complete (see Poll SA). Prefer polling inside the same turn with `Await` every 3s up to ~2 min before ending the turn.
+5. On ready: save `.sa_bridge/last_sa_response.md`, then:
+
+```bash
+python3 scripts/sa_bridge_ctl.py mark-ready
+```
+
+6. Parse SA message. If phase **DONE** → `disarm`. Else → `mark-executing` and go to step 1.
+
+## Poll SA (browser CDP)
+
+Prerequisites: ChatGPT tab logged in; URL from `.sa_bridge/config.json`.
+
+```javascript
+(function(){
+  const stop = document.querySelector(
+    '[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Dừng"]'
+  );
+  const msgs = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+  const last = msgs[msgs.length - 1];
+  return JSON.stringify({
+    streaming: !!(stop && stop.offsetParent),
+    assistantCount: msgs.length,
+    lastLen: last ? last.innerText.length : 0,
+    lastPreview: last ? last.innerText.slice(-400) : ""
+  });
+})()
+```
+
+**Ready when:** `streaming === false` AND (`assistantCount` > count at send OR `lastLen` > len at send) AND `lastLen` stable across 2 reads 3s apart.
+
+On ready, save full text:
+
+```javascript
+(function(){
+  const msgs = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+  return msgs[msgs.length-1]?.innerText || "";
+})()
+```
+
+Write to `.sa_bridge/last_sa_response.md`.
+
+## Send message to SA
+
+```javascript
+(function(){
+  const ta = document.querySelector('#prompt-textarea');
+  ta.focus();
+  ta.textContent = `YOUR MESSAGE HERE`;
+  ta.dispatchEvent(new InputEvent('input', {bubbles: true}));
+  return 'done';
+})()
+```
+
+Then `browser_press_key` Enter.
+
+## Stop hook (no user wake)
+
+When this turn ends while `loop_active` and `status` is `waiting_for_sa` or `sa_ready`, `.cursor/hooks/stop_sa_bridge.sh` injects a **followup_message** so the agent continues automatically (up to `loop_limit`).
+
+## Rules
+
+- Do **not** ask the user to continue or approve between SA steps.
+- Do **not** change subtitle text after `vi_after_final_repair` except timing-only stages.
+- Only `disarm` when SA confirms DONE or on unrecoverable blocker (then disarm with `--reason`).
+- Report blockers to the user; keep loop armed only if SA work can resume.
+
+## Disarm
+
+```bash
+python3 scripts/sa_bridge_ctl.py disarm --reason "SA confirmed DONE"
+```

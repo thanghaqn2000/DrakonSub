@@ -438,6 +438,14 @@
         </select>
       </div>
 
+      <div class="field" id="translation-engine-field">
+        <label for="translation-engine">Engine dịch subtitle</label>
+        <select id="translation-engine">
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </div>
+
       <div class="field">
         <label for="output-name">Tên file output (không cần .mp4)</label>
         <input type="text" id="output-name" placeholder="vid-speech-vietsub" />
@@ -451,6 +459,8 @@
           <button class="btn-secondary" id="edit-layout-btn" disabled hidden>Chỉnh layout</button>
           <button class="btn-secondary" id="render-again-btn" disabled hidden>Render lại</button>
           <button class="btn-secondary" id="download-btn" disabled hidden>Tải xuống</button>
+          <button class="btn-secondary" id="download-source-srt-btn" disabled hidden>Tải SRT gốc</button>
+          <button class="btn-secondary" id="download-vi-srt-btn" disabled hidden>Tải SRT tiếng Việt</button>
         </div>
       </div>
 
@@ -552,11 +562,15 @@
     const fileInput = document.getElementById("file-input");
     const topicSelect = document.getElementById("topic");
     const topicField = document.getElementById("topic-field");
+    const translationEngineField = document.getElementById("translation-engine-field");
+    const translationEngineSelect = document.getElementById("translation-engine");
     const outputName = document.getElementById("output-name");
     const generateBtn = document.getElementById("generate-btn");
     const editLayoutBtn = document.getElementById("edit-layout-btn");
     const renderAgainBtn = document.getElementById("render-again-btn");
     const downloadBtn = document.getElementById("download-btn");
+    const downloadSourceSrtBtn = document.getElementById("download-source-srt-btn");
+    const downloadViSrtBtn = document.getElementById("download-vi-srt-btn");
     const layoutPanel = document.getElementById("layout-panel");
     const progressWrap = document.getElementById("progress-wrap");
     const progressFill = document.getElementById("progress-fill");
@@ -597,6 +611,7 @@
         document.getElementById("lang-en-btn").classList.toggle("active", sourceLang === "en");
         document.getElementById("lang-vi-btn").classList.toggle("active", sourceLang === "vi");
         topicField.classList.toggle("hidden", sourceLang === "vi");
+        translationEngineField.classList.toggle("hidden", sourceLang === "vi");
       });
     });
 
@@ -631,6 +646,18 @@
         if (!res.ok) return;
         const data = await res.json();
         defaultLayout = data.default_layout;
+        if (Array.isArray(data.translation_engines)) {
+          translationEngineSelect.innerHTML = "";
+          data.translation_engines.forEach((engine) => {
+            const opt = document.createElement("option");
+            opt.value = engine;
+            opt.textContent = engine === "gemini" ? "Gemini" : "OpenAI";
+            translationEngineSelect.appendChild(opt);
+          });
+        }
+        if (data.translation_engine) {
+          translationEngineSelect.value = data.translation_engine;
+        }
       } catch (_) {}
     }
 
@@ -762,15 +789,37 @@
       outputPreview.innerHTML = `<p class="placeholder">Video sau khi tạo sẽ hiện ở đây</p>`;
       downloadBtn.hidden = true;
       downloadBtn.disabled = true;
+      downloadSourceSrtBtn.hidden = true;
+      downloadSourceSrtBtn.disabled = true;
+      downloadViSrtBtn.hidden = true;
+      downloadViSrtBtn.disabled = true;
       resetLayoutUi();
     }
 
-    function setOutputPreview(previewUrl, downloadUrl) {
+    function setOutputPreview(previewUrl, downloadUrl, sourceSrtUrl, viSrtUrl) {
       const bust = `${previewUrl}?t=${Date.now()}`;
       renderVideoPreview(outputPreview, bust, { label: "output" });
       downloadBtn.hidden = false;
       downloadBtn.disabled = false;
       downloadBtn.onclick = () => { window.location.href = downloadUrl; };
+
+      if (sourceSrtUrl) {
+        downloadSourceSrtBtn.hidden = false;
+        downloadSourceSrtBtn.disabled = false;
+        downloadSourceSrtBtn.onclick = () => { window.location.href = sourceSrtUrl; };
+      } else {
+        downloadSourceSrtBtn.hidden = true;
+        downloadSourceSrtBtn.disabled = true;
+      }
+
+      if (viSrtUrl) {
+        downloadViSrtBtn.hidden = false;
+        downloadViSrtBtn.disabled = false;
+        downloadViSrtBtn.onclick = () => { window.location.href = viSrtUrl; };
+      } else {
+        downloadViSrtBtn.hidden = true;
+        downloadViSrtBtn.disabled = true;
+      }
     }
 
     function layoutFromControls() {
@@ -860,7 +909,12 @@
 
     function onJobComplete(data) {
       const completedJobId = currentJobId;
-      setOutputPreview(data.preview_url, data.download_url);
+      setOutputPreview(
+        data.preview_url,
+        data.download_url,
+        data.source_srt_download_url,
+        data.vi_srt_download_url
+      );
       editLayoutBtn.hidden = false;
       editLayoutBtn.disabled = false;
       renderAgainBtn.hidden = false;
@@ -1024,6 +1078,7 @@
       form.append("output_name", name);
       form.append("topic", topicSelect.value);
       form.append("source_language", sourceLang);
+      form.append("translation_engine", translationEngineSelect.value);
 
       try {
         const res = await fetch("/api/jobs", { method: "POST", body: form });

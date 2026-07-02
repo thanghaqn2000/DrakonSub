@@ -1,0 +1,33 @@
+{
+  "detected_topic": "personal development and societal change",
+  "confidence": 0.9,
+  "audience_level": "general_beginner",
+  "translation_style": "simple, natural Vietnamese subtitles for general adults",
+  "tone": "inspirational",
+  "short_summary": "Khuyến khích mọi người chấp nhận bản thân và theo đuổi đam mê để tạo ra sự thay đổi tích cực trong cuộc sống và xã hội.",
+  "key_terms": [
+    {
+      "source": "outsider",
+      "suggested_vi": "người ngoài",
+      "plain_explanation": "Người không thuộc về một nhóm hay xã hội nào đó, thường có quan điểm khác biệt.",
+      "confidence": 0.8
+    },
+    {
+      "source": "broken system",
+      "suggested_vi": "hệ thống hỏng",
+      "plain_explanation": "Một hệ thống không hoạt động hiệu quả hoặc công bằng.",
+      "confidence": 0.7
+    },
+    {
+      "source": "liberty",
+      "suggested_vi": "tự do",
+      "plain_explanation": "Quyền được sống và hành động theo ý muốn của mình.",
+      "confidence": 0.9
+    }
+  ],
+  "named_entities": [],
+  "possible_asr_risks": [],
+  "translation_warnings": [
+    "Cẩn thận với các cụm từ có thể mang nghĩa bóng hoặc không rõ ràng."
+  ]
+}

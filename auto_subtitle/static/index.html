@@ -396,6 +396,199 @@
       text-align: center;
       padding: 1rem;
     }
+
+    .status-hint {
+      margin-top: 0.85rem;
+      padding: 0.8rem 1rem;
+      border-radius: 10px;
+      border: 1px solid rgba(147, 51, 234, 0.35);
+      background: rgba(147, 51, 234, 0.1);
+      color: #d8b4fe;
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .status-hint.visible { display: block; }
+
+    .subtitle-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.72);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      z-index: 50;
+    }
+
+    .subtitle-modal.visible { display: flex; }
+
+    .subtitle-modal-card {
+      width: min(1100px, 100%);
+      max-height: calc(100vh - 3rem);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .subtitle-modal-header,
+    .subtitle-modal-footer {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .subtitle-modal-footer {
+      border-bottom: none;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      position: sticky;
+      bottom: 0;
+      background: var(--surface);
+    }
+
+    .subtitle-modal-header h3 {
+      font-size: 1rem;
+      margin-bottom: 0.65rem;
+    }
+
+    .subtitle-summary {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .subtitle-modal-body {
+      padding: 1rem 1.25rem;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+    }
+
+    .subtitle-modal-status {
+      margin-top: 0.75rem;
+      font-size: 0.86rem;
+      color: var(--muted);
+      min-height: 1.2rem;
+    }
+
+    .subtitle-modal-status.error {
+      color: #fca5a5;
+      display: block;
+      background: transparent;
+      border: none;
+      padding: 0;
+      margin-top: 0.75rem;
+    }
+
+    .subtitle-cue {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.95rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .subtitle-cue.edited {
+      border-color: rgba(147, 51, 234, 0.5);
+      box-shadow: inset 0 0 0 1px rgba(147, 51, 234, 0.18);
+    }
+
+    .subtitle-cue-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .subtitle-cue-title {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .subtitle-cue-title strong {
+      font-size: 0.95rem;
+    }
+
+    .subtitle-cue-time {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.22rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .badge.edited {
+      background: rgba(147, 51, 234, 0.12);
+      border-color: rgba(147, 51, 234, 0.4);
+      color: #d8b4fe;
+    }
+
+    .subtitle-block {
+      margin-bottom: 0.7rem;
+    }
+
+    .subtitle-block-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle-block-text {
+      white-space: pre-wrap;
+      line-height: 1.45;
+      font-size: 0.92rem;
+    }
+
+    .subtitle-textarea {
+      width: 100%;
+      min-height: 82px;
+      resize: vertical;
+      padding: 0.75rem 0.85rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+      line-height: 1.45;
+      font-family: inherit;
+    }
+
+    .subtitle-textarea:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+
+    .subtitle-cue-actions {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+
+    .subtitle-empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      padding: 2rem 1rem;
+    }
   </style>
 </head>
 <body>
@@ -457,12 +650,15 @@
         </div>
         <div class="actions-secondary">
           <button class="btn-secondary" id="edit-layout-btn" disabled hidden>Chỉnh layout</button>
+          <button class="btn-secondary" id="edit-subtitles-btn" disabled hidden>Chỉnh phụ đề</button>
           <button class="btn-secondary" id="render-again-btn" disabled hidden>Render lại</button>
           <button class="btn-secondary" id="download-btn" disabled hidden>Tải xuống</button>
           <button class="btn-secondary" id="download-source-srt-btn" disabled hidden>Tải SRT gốc</button>
           <button class="btn-secondary" id="download-vi-srt-btn" disabled hidden>Tải SRT tiếng Việt</button>
         </div>
       </div>
+
+      <div class="status-hint" id="subtitle-status-hint"></div>
 
       <div class="progress-wrap" id="progress-wrap">
         <div class="progress-bar">
@@ -538,6 +734,32 @@
       </div>
       <p class="field-hint">Xem trước overlay trên video gốc — chỉ là text mẫu, không sửa nội dung sub thật.</p>
     </div>
+
+    <div class="subtitle-modal" id="subtitle-modal">
+      <div class="subtitle-modal-card">
+        <div class="subtitle-modal-header">
+          <h3>Chỉnh phụ đề</h3>
+          <div class="subtitle-summary">
+            <span id="subtitle-total">Tổng số dòng phụ đề: 0</span>
+            <span id="subtitle-edited-count">Đã chỉnh sửa: 0 dòng</span>
+            <span id="subtitle-source-label">Nguồn hiện tại: -</span>
+          </div>
+          <div class="subtitle-modal-status" id="subtitle-modal-status"></div>
+        </div>
+        <div class="subtitle-modal-body" id="subtitle-modal-body">
+          <div class="subtitle-empty">Chưa có dữ liệu phụ đề.</div>
+        </div>
+        <div class="subtitle-modal-footer">
+          <div class="actions-secondary">
+            <button class="btn-secondary" id="subtitle-reset-all-btn">Khôi phục tất cả</button>
+            <button class="btn-secondary" id="subtitle-close-btn">Đóng</button>
+          </div>
+          <div class="actions-primary">
+            <button class="btn-primary" id="subtitle-save-btn" disabled>Lưu chỉnh sửa</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -567,6 +789,7 @@
     const outputName = document.getElementById("output-name");
     const generateBtn = document.getElementById("generate-btn");
     const editLayoutBtn = document.getElementById("edit-layout-btn");
+    const editSubtitlesBtn = document.getElementById("edit-subtitles-btn");
     const renderAgainBtn = document.getElementById("render-again-btn");
     const downloadBtn = document.getElementById("download-btn");
     const downloadSourceSrtBtn = document.getElementById("download-source-srt-btn");
@@ -578,6 +801,16 @@
     const errorBox = document.getElementById("error-box");
     const inputPreview = document.getElementById("input-preview");
     const outputPreview = document.getElementById("output-preview");
+    const subtitleStatusHint = document.getElementById("subtitle-status-hint");
+    const subtitleModal = document.getElementById("subtitle-modal");
+    const subtitleModalBody = document.getElementById("subtitle-modal-body");
+    const subtitleSaveBtn = document.getElementById("subtitle-save-btn");
+    const subtitleResetAllBtn = document.getElementById("subtitle-reset-all-btn");
+    const subtitleCloseBtn = document.getElementById("subtitle-close-btn");
+    const subtitleTotal = document.getElementById("subtitle-total");
+    const subtitleEditedCount = document.getElementById("subtitle-edited-count");
+    const subtitleSourceLabel = document.getElementById("subtitle-source-label");
+    const subtitleModalStatus = document.getElementById("subtitle-modal-status");
 
     const layoutControls = {
       x: document.getElementById("layout-x"),
@@ -604,6 +837,16 @@
     let layoutDirty = false;
     let currentLayout = null;
     let layoutOverlayEl = null;
+    let subtitleEditorOpen = false;
+    let subtitleState = {
+      loaded: [],
+      draft: [],
+      hasEdits: false,
+      subtitleSource: "",
+      dirty: false,
+      saving: false,
+      activeCueIndex: null,
+    };
 
     document.querySelectorAll('input[name="source_language"]').forEach((radio) => {
       radio.addEventListener("change", () => {
@@ -692,6 +935,251 @@
     function clearError() {
       errorBox.classList.remove("visible");
       errorBox.textContent = "";
+    }
+
+    function showSubtitleHint(message) {
+      subtitleStatusHint.textContent = message;
+      subtitleStatusHint.classList.add("visible");
+    }
+
+    function hideSubtitleHint() {
+      subtitleStatusHint.textContent = "";
+      subtitleStatusHint.classList.remove("visible");
+    }
+
+    function setSubtitleModalStatus(message, isError = false) {
+      subtitleModalStatus.textContent = message || "";
+      subtitleModalStatus.classList.toggle("error", !!(message && isError));
+    }
+
+    function parseSrtTimeToSeconds(value) {
+      const match = /^(\d{2}):(\d{2}):(\d{2}),(\d{3})$/.exec((value || "").trim());
+      if (!match) return 0;
+      const [, hh, mm, ss, ms] = match;
+      return Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function getPreviewVideo(container, fallbackId) {
+      const video = container.querySelector("video");
+      if (!video) return null;
+      if (!video.id) video.id = fallbackId;
+      return video;
+    }
+
+    function getActivePreviewVideo() {
+      const outputVideo = getPreviewVideo(outputPreview, "output-preview-video");
+      const inputVideo = getPreviewVideo(inputPreview, "input-preview-video");
+
+      if (outputVideo && (outputVideo.currentSrc || outputVideo.src)) {
+        return outputVideo;
+      }
+      if (inputVideo && (inputVideo.currentSrc || inputVideo.src)) {
+        return inputVideo;
+      }
+      return null;
+    }
+
+    function waitForVideoMetadata(video) {
+      return new Promise((resolve, reject) => {
+        if (!video) {
+          reject(new Error("No video element"));
+          return;
+        }
+        if (video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0) {
+          resolve();
+          return;
+        }
+
+        let timeoutId = null;
+        const cleanup = () => {
+          video.removeEventListener("loadedmetadata", onLoaded);
+          video.removeEventListener("error", onError);
+          if (timeoutId) clearTimeout(timeoutId);
+        };
+        const onLoaded = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error("Video metadata failed to load"));
+        };
+
+        video.addEventListener("loadedmetadata", onLoaded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(new Error("Video metadata timed out"));
+        }, 2500);
+      });
+    }
+
+    async function seekVideoTo(video, seconds) {
+      await waitForVideoMetadata(video);
+      const duration = Number.isFinite(video.duration) ? video.duration : null;
+      let target = Math.max(0, seconds);
+      if (duration !== null) {
+        target = Math.min(target, Math.max(0, duration - 0.05));
+      }
+
+      video.pause();
+      const seekPromise = new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          video.removeEventListener("seeked", finish);
+          resolve();
+        };
+        video.addEventListener("seeked", finish, { once: true });
+        setTimeout(finish, 250);
+      });
+
+      video.currentTime = target;
+      await seekPromise;
+
+      if (Math.abs(video.currentTime - target) > 0.4) {
+        video.currentTime = target;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+
+      try {
+        await video.play();
+      } catch (err) {
+        console.warn("Video play failed after seek", err);
+      }
+      return target;
+    }
+
+    async function seekPreviewToCue(startTime, cueIndex = null) {
+      const video = getActivePreviewVideo();
+      if (!video) {
+        setSubtitleModalStatus("Không thể tua video tới đoạn này. Vui lòng thử lại.", true);
+        throw new Error("No active preview video");
+      }
+      const seconds = parseSrtTimeToSeconds(startTime);
+      const selectedLabel = cueIndex ? `Đang phát đoạn phụ đề #${cueIndex}` : "Đang phát đoạn phụ đề";
+      subtitleState.activeCueIndex = cueIndex;
+      setSubtitleModalStatus(selectedLabel);
+      try {
+        await seekVideoTo(video, seconds);
+      } catch (err) {
+        subtitleState.activeCueIndex = null;
+        setSubtitleModalStatus("Không thể tua video tới đoạn này. Vui lòng thử lại.", true);
+        throw err;
+      }
+    }
+
+    function cloneSubtitleCue(cue) {
+      return { ...cue };
+    }
+
+    function subtitleEditedCountValue() {
+      return subtitleState.draft.filter((cue) => cue.edited).length;
+    }
+
+    function updateSubtitleSummary() {
+      subtitleTotal.textContent = `Tổng số dòng phụ đề: ${subtitleState.draft.length}`;
+      subtitleEditedCount.textContent = `Đã chỉnh sửa: ${subtitleEditedCountValue()} dòng`;
+      subtitleSourceLabel.textContent = `Nguồn hiện tại: ${subtitleState.subtitleSource || "-"}`;
+      subtitleSaveBtn.disabled = !subtitleState.dirty || subtitleState.saving;
+    }
+
+    function changedSubtitleEdits() {
+      return subtitleState.draft
+        .filter((cue) => cue.current_vi_text.trim() !== cue.original_vi_text.trim())
+        .map((cue) => ({
+          cue_index: cue.cue_index,
+          text: cue.current_vi_text,
+        }));
+    }
+
+    function renderSubtitleEditor() {
+      updateSubtitleSummary();
+      if (!subtitleState.draft.length) {
+        subtitleModalBody.innerHTML = `<div class="subtitle-empty">Chưa có dữ liệu phụ đề.</div>`;
+        return;
+      }
+
+      subtitleModalBody.innerHTML = subtitleState.draft.map((cue, idx) => `
+        <div class="subtitle-cue ${cue.edited ? "edited" : ""}" data-cue-index="${cue.cue_index}" data-start="${cue.start}">
+          <div class="subtitle-cue-head">
+            <div class="subtitle-cue-title">
+              <strong>Cue #${cue.cue_index}</strong>
+              <span class="subtitle-cue-time">${cue.start} → ${cue.end}</span>
+            </div>
+            <span class="badge ${cue.edited ? "edited" : ""}">${cue.edited ? "Đã sửa" : "Bản AI"}</span>
+          </div>
+          <div class="subtitle-block">
+            <div class="subtitle-block-label">EN:</div>
+            <div class="subtitle-block-text">${escapeHtml(cue.source_text || "")}</div>
+          </div>
+          <div class="subtitle-block">
+            <div class="subtitle-block-label">Bản AI:</div>
+            <div class="subtitle-block-text">${escapeHtml(cue.original_vi_text || "")}</div>
+          </div>
+          <div class="subtitle-block">
+            <div class="subtitle-block-label">Bản đang dùng:</div>
+            <textarea class="subtitle-textarea" data-index="${idx}">${escapeHtml(cue.current_vi_text || "")}</textarea>
+          </div>
+          <div class="subtitle-cue-actions">
+            <button class="btn-secondary subtitle-play-btn" data-start="${cue.start}" data-cue-index="${cue.cue_index}">Play đoạn này</button>
+            <button class="btn-secondary subtitle-reset-btn" data-cue-index="${cue.cue_index}">Reset</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function updateSubtitleCueUi(index) {
+      const cue = subtitleState.draft[index];
+      const cueEl = subtitleModalBody.querySelector(`.subtitle-cue[data-cue-index="${cue.cue_index}"]`);
+      if (!cueEl) {
+        updateSubtitleSummary();
+        return;
+      }
+      cueEl.classList.toggle("edited", cue.edited);
+      const badge = cueEl.querySelector(".badge");
+      if (badge) {
+        badge.textContent = cue.edited ? "Đã sửa" : "Bản AI";
+        badge.classList.toggle("edited", cue.edited);
+      }
+      updateSubtitleSummary();
+    }
+
+    async function loadSubtitlesForEditor() {
+      const res = await fetch(`/api/jobs/${currentJobId}/subtitles`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không tải được phụ đề");
+      subtitleState.loaded = data.subtitles.map(cloneSubtitleCue);
+      subtitleState.draft = data.subtitles.map(cloneSubtitleCue);
+      subtitleState.hasEdits = !!data.has_edits;
+      subtitleState.subtitleSource = data.subtitle_source || "";
+      subtitleState.dirty = false;
+      subtitleState.activeCueIndex = null;
+      setSubtitleModalStatus("");
+      renderSubtitleEditor();
+      return data;
+    }
+
+    function openSubtitleEditor() {
+      subtitleEditorOpen = true;
+      subtitleModal.classList.add("visible");
+    }
+
+    function closeSubtitleEditor(force = false) {
+      if (!force && subtitleState.dirty) {
+        const ok = window.confirm("Bạn có thay đổi chưa lưu. Đóng mà không lưu?");
+        if (!ok) return;
+      }
+      subtitleEditorOpen = false;
+      subtitleModal.classList.remove("visible");
     }
 
     function hexToRgba(hex, opacity) {
@@ -783,6 +1271,9 @@
       renderAgainBtn.disabled = true;
       layoutPanel.classList.add("hidden");
       if (layoutOverlayEl) layoutOverlayEl.classList.add("hidden");
+      editSubtitlesBtn.hidden = true;
+      editSubtitlesBtn.disabled = true;
+      hideSubtitleHint();
     }
 
     function clearOutputPreview() {
@@ -917,6 +1408,8 @@
       );
       editLayoutBtn.hidden = false;
       editLayoutBtn.disabled = false;
+      editSubtitlesBtn.hidden = false;
+      editSubtitlesBtn.disabled = false;
       renderAgainBtn.hidden = false;
       renderAgainBtn.disabled = !data.can_render_again;
       layoutDirty = false;
@@ -942,6 +1435,9 @@
         editLayoutBtn.disabled = layoutEditing;
         renderAgainBtn.disabled = layoutDirty || !data.can_render_again;
         onJobComplete(data);
+        if (subtitleState.hasEdits) {
+          showSubtitleHint("Đã chỉnh sửa phụ đề. Bấm Render lại để cập nhật video.");
+        }
         return;
       }
 
@@ -1003,6 +1499,117 @@
         clearError();
       } catch (err) {
         showError(err.message);
+      }
+    });
+
+    editSubtitlesBtn.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      clearError();
+      try {
+        await loadSubtitlesForEditor();
+        openSubtitleEditor();
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    subtitleModalBody.addEventListener("input", (event) => {
+      const textarea = event.target.closest(".subtitle-textarea");
+      if (!textarea) return;
+      const index = Number(textarea.dataset.index);
+      const cue = subtitleState.draft[index];
+      if (!cue) return;
+      cue.current_vi_text = textarea.value;
+      cue.edited = cue.current_vi_text.trim() !== cue.original_vi_text.trim();
+      subtitleState.dirty = true;
+      updateSubtitleCueUi(index);
+    });
+
+    subtitleModalBody.addEventListener("click", async (event) => {
+      const cueCard = event.target.closest(".subtitle-cue");
+      if (
+        cueCard &&
+        !event.target.closest("textarea") &&
+        !event.target.closest("button")
+      ) {
+        try {
+          await seekPreviewToCue(cueCard.dataset.start, Number(cueCard.dataset.cueIndex));
+        } catch (_) {}
+      }
+
+      const playBtn = event.target.closest(".subtitle-play-btn");
+      if (playBtn) {
+        try {
+          await seekPreviewToCue(playBtn.dataset.start, Number(playBtn.dataset.cueIndex));
+        } catch (_) {}
+        return;
+      }
+
+      const resetBtn = event.target.closest(".subtitle-reset-btn");
+      if (resetBtn) {
+        try {
+          const cueIndex = Number(resetBtn.dataset.cueIndex);
+          const res = await fetch(`/api/jobs/${currentJobId}/subtitles/reset`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cue_indices: [cueIndex] }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Reset thất bại");
+          await loadSubtitlesForEditor();
+          showSubtitleHint("Đã lưu chỉnh sửa phụ đề. Bấm Render lại để cập nhật video.");
+          subtitleState.hasEdits = data.has_edits;
+        } catch (err) {
+          showError(err.message || "Reset thất bại");
+        }
+      }
+    });
+
+    subtitleSaveBtn.addEventListener("click", async () => {
+      if (!currentJobId || !subtitleState.dirty) return;
+      subtitleState.saving = true;
+      updateSubtitleSummary();
+      try {
+        const edits = changedSubtitleEdits();
+        const res = await fetch(`/api/jobs/${currentJobId}/subtitles/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ edits }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Lưu chỉnh sửa thất bại");
+        await loadSubtitlesForEditor();
+        subtitleState.hasEdits = true;
+        showSubtitleHint("Đã lưu chỉnh sửa phụ đề. Bấm Render lại để cập nhật video.");
+      } catch (err) {
+        showError(err.message || "Lưu chỉnh sửa thất bại");
+      } finally {
+        subtitleState.saving = false;
+        updateSubtitleSummary();
+      }
+    });
+
+    subtitleResetAllBtn.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      try {
+        const res = await fetch(`/api/jobs/${currentJobId}/subtitles/reset-all`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Khôi phục thất bại");
+        await loadSubtitlesForEditor();
+        subtitleState.hasEdits = false;
+        showSubtitleHint("Đã khôi phục toàn bộ phụ đề về bản AI.");
+      } catch (err) {
+        showError(err.message || "Khôi phục thất bại");
+      }
+    });
+
+    subtitleCloseBtn.addEventListener("click", () => closeSubtitleEditor(false));
+
+    subtitleModal.addEventListener("click", (event) => {
+      if (event.target === subtitleModal) {
+        closeSubtitleEditor(false);
       }
     });
 

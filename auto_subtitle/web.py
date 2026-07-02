@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from .config import (
     SUPPORTED_TRANSLATION_ENGINES,
@@ -15,11 +15,22 @@ from .config import (
     get_translation_engine,
     load_env,
 )
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .pipeline import SubtitleConfig, generate_vietsub, reburn_subtitles
+from .subtitle_edit_service import (
+    SubtitleEditError,
+    apply_text_edits,
+    cue_indices_from_request,
+    get_effective_vi_srt,
+    load_srt,
+    merge_subtitle_views,
+    reset_cues_to_original,
+    write_srt,
+    write_user_edits,
+)
 from .subtitle_renderer import (
     FONT_FAMILY_CHOICES,
     default_layout_dict,
@@ -59,12 +70,66 @@ class Job:
     subtitle_font_size: Optional[int] = None
     subtitle_font_color: Optional[str] = None
     source_language: str = "en"
+    last_render_subtitle_source: Optional[str] = None
 
 
 jobs: Dict[str, Job] = {}
 jobs_lock = threading.Lock()
 
 app = FastAPI(title="DrakonSub")
+
+
+def _iter_file_chunks(path: str, start: int, end: int, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+    with open(path, "rb") as fp:
+        fp.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            size = min(chunk_size, remaining)
+            chunk = fp.read(size)
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _video_preview_response(path: str, request: Request) -> Response:
+    file_size = os.path.getsize(path)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": "inline",
+    }
+    range_header = request.headers.get("range")
+    if not range_header:
+        headers["Content-Length"] = str(file_size)
+        return FileResponse(path, media_type="video/mp4", headers=headers)
+
+    try:
+        units, raw_range = range_header.strip().split("=", 1)
+        if units != "bytes":
+            raise ValueError("Invalid range unit")
+        start_text, end_text = raw_range.split("-", 1)
+        if start_text == "":
+            length = int(end_text)
+            start = max(file_size - length, 0)
+            end = file_size - 1
+        else:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+        if start > end or start < 0 or end >= file_size:
+            raise ValueError("Invalid byte range")
+    except (ValueError, IndexError):
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+    headers.update({
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Content-Length": str(end - start + 1),
+    })
+    return StreamingResponse(
+        _iter_file_chunks(path, start, end),
+        status_code=206,
+        media_type="video/mp4",
+        headers=headers,
+    )
 
 
 def prepare_output_name(name: str, fallback: str) -> str:
@@ -106,9 +171,31 @@ def build_subtitle_config(job: Job) -> SubtitleConfig:
     return config
 
 
+def _validate_job_id(job_id: str) -> str:
+    raw = (job_id or "").strip()
+    if (
+        not raw
+        or "/" in raw
+        or "\\" in raw
+        or ".." in raw
+        or Path(raw).is_absolute()
+    ):
+        raise HTTPException(404, "Job not found")
+    return raw
+
+
 def _job_paths(job_id: str) -> tuple[Path, Path, Path, Path]:
+    job_id = _validate_job_id(job_id)
     job_dir = JOBS_ROOT / job_id
-    return job_dir, job_dir / "source.srt", job_dir / "vi.srt", job_dir / "layout.json"
+    return job_dir, job_dir / "source.srt", job_dir / "vi_final.srt", job_dir / "layout.json"
+
+
+def _edited_vi_path(job_id: str) -> Path:
+    return _job_paths(job_id)[0] / "edited_vi.srt"
+
+
+def _user_edits_path(job_id: str) -> Path:
+    return _job_paths(job_id)[0] / "user_edits.json"
 
 
 def _read_layout_file(path: str) -> Dict[str, Any]:
@@ -227,6 +314,7 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         "vi_srt_download_url": f"/api/jobs/{job.id}/download/vi-srt"
         if job.status == JobStatus.DONE and job.srt_path and os.path.isfile(job.srt_path)
         else None,
+        "subtitle_source": job.last_render_subtitle_source,
     }
 
 
@@ -266,6 +354,7 @@ def _run_job(job_id: str) -> None:
             jobs[job_id].layout_saved = True
             jobs[job_id].message = "Complete"
             jobs[job_id].progress = 100
+            jobs[job_id].last_render_subtitle_source = Path(srt_path).name
     except Exception as exc:
         traceback.print_exc()
         with jobs_lock:
@@ -291,7 +380,7 @@ def reburn_job_subtitles(
         if not job.input_path or not os.path.isfile(job.input_path):
             raise RuntimeError("Original video not found")
         if not job.srt_path or not os.path.isfile(job.srt_path):
-            raise RuntimeError("vi.srt not found — run Generate first")
+            raise RuntimeError("Vietnamese subtitle not found — run Generate first")
         layout_path = job.layout_path or str(_job_paths(job_id)[3])
         if layout is None:
             if not os.path.isfile(layout_path):
@@ -310,15 +399,21 @@ def reburn_job_subtitles(
         config = build_subtitle_config(job)
 
     try:
+        effective_srt = str(get_effective_vi_srt(_job_paths(job_id)[0]))
+        subtitle_source = Path(effective_srt).name
+        print(f"[render] effective subtitle: {subtitle_source}")
         reburn_subtitles(
             job.input_path,
-            job.srt_path,
+            effective_srt,
             tmp_output_path,
             layout,
             config=config,
             on_progress=on_progress,
         )
         os.replace(tmp_output_path, output_path)
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id].last_render_subtitle_source = subtitle_source
     finally:
         if os.path.isfile(tmp_output_path):
             try:
@@ -505,7 +600,7 @@ def render_job_again(job_id: str):
         if not job.layout_saved:
             raise HTTPException(400, "Save layout before re-rendering")
         if not job.srt_path or not os.path.isfile(job.srt_path):
-            raise HTTPException(400, "vi.srt not found — run Generate first")
+            raise HTTPException(400, "Vietnamese SRT is not ready yet")
         if not job.input_path or not os.path.isfile(job.input_path):
             raise HTTPException(400, "Original video not found")
         job.status = JobStatus.PROCESSING
@@ -524,11 +619,12 @@ def render_job_again(job_id: str):
                 job.error = "Failed to start re-render worker"
         raise
 
-    return {"ok": True, "job_id": job_id}
+    subtitle_source = get_effective_vi_srt(_job_paths(job_id)[0]).name
+    return {"ok": True, "job_id": job_id, "subtitle_source": subtitle_source}
 
 
 @app.get("/api/jobs/{job_id}/preview")
-def preview_job(job_id: str):
+def preview_job(job_id: str, request: Request):
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
@@ -540,11 +636,7 @@ def preview_job(job_id: str):
     if not os.path.isfile(path):
         raise HTTPException(404, "Output file not found")
 
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        headers={"Content-Disposition": "inline"},
-    )
+    return _video_preview_response(path, request)
 
 
 @app.get("/api/jobs/{job_id}/download")
@@ -608,6 +700,123 @@ def download_job_vi_srt(job_id: str):
         media_type="application/x-subrip",
         filename=f"{name}.vi.srt",
     )
+
+
+@app.get("/api/jobs/{job_id}/subtitles")
+def get_job_subtitles(job_id: str):
+    _validate_job_id(job_id)
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        job_dir = _job_paths(job_id)[0]
+        source_path = Path(job.source_srt_path) if job.source_srt_path else job_dir / "source.srt"
+        vi_final_path = Path(job.srt_path) if job.srt_path else job_dir / "vi_final.srt"
+
+    if not vi_final_path.exists():
+        raise HTTPException(404, "Vietnamese subtitle not found")
+    try:
+        source_cues = load_srt(source_path) if source_path.exists() else None
+        original_vi_cues = load_srt(vi_final_path)
+        current_path = get_effective_vi_srt(job_dir)
+        current_vi_cues = load_srt(current_path)
+        subtitles = merge_subtitle_views(source_cues, original_vi_cues, current_vi_cues)
+    except SubtitleEditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "job_id": job_id,
+        "has_edits": any(item["edited"] for item in subtitles),
+        "subtitle_source": current_path.name,
+        "subtitles": subtitles,
+    }
+
+
+@app.post("/api/jobs/{job_id}/subtitles/save")
+def save_job_subtitles(job_id: str, body: Dict[str, Any] = Body(...)):
+    _validate_job_id(job_id)
+    edits = body.get("edits")
+    if not isinstance(edits, list) or not edits:
+        raise HTTPException(400, "Invalid cue index")
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        job_dir = _job_paths(job_id)[0]
+        vi_final_path = Path(job.srt_path) if job.srt_path else job_dir / "vi_final.srt"
+    if not vi_final_path.exists():
+        raise HTTPException(404, "Vietnamese subtitle not found")
+
+    edited_path = _edited_vi_path(job_id)
+    try:
+        original_vi_cues = load_srt(vi_final_path)
+        current_vi_cues = load_srt(edited_path) if edited_path.exists() else load_srt(vi_final_path)
+        updated_cues = apply_text_edits(original_vi_cues, current_vi_cues, edits)
+        write_srt(updated_cues, edited_path)
+        payload = write_user_edits(job_id, _user_edits_path(job_id), original_vi_cues, updated_cues)
+    except SubtitleEditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "job_id": job_id,
+        "saved": True,
+        "edited_count": len(payload["edits"]),
+        "edited_srt": edited_path.name,
+        "message": "Subtitle edits saved. Re-render video to apply changes.",
+    }
+
+
+@app.post("/api/jobs/{job_id}/subtitles/reset")
+def reset_job_subtitles(job_id: str, body: Dict[str, Any] = Body(...)):
+    _validate_job_id(job_id)
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        vi_final_path = Path(job.srt_path) if job.srt_path else _job_paths(job_id)[0] / "vi_final.srt"
+    if not vi_final_path.exists():
+        raise HTTPException(404, "Vietnamese subtitle not found")
+
+    edited_path = _edited_vi_path(job_id)
+    try:
+        cue_indices = cue_indices_from_request(body)
+        original_vi_cues = load_srt(vi_final_path)
+        current_vi_cues = load_srt(edited_path) if edited_path.exists() else load_srt(vi_final_path)
+        updated_cues = reset_cues_to_original(original_vi_cues, current_vi_cues, cue_indices)
+        payload = write_user_edits(job_id, _user_edits_path(job_id), original_vi_cues, updated_cues)
+        if payload["edits"]:
+            write_srt(updated_cues, edited_path)
+        elif edited_path.exists():
+            edited_path.unlink()
+    except SubtitleEditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "job_id": job_id,
+        "reset_count": len(cue_indices),
+        "has_edits": bool(payload["edits"]),
+    }
+
+
+@app.post("/api/jobs/{job_id}/subtitles/reset-all")
+def reset_all_job_subtitles(job_id: str):
+    _validate_job_id(job_id)
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        vi_final_path = Path(job.srt_path) if job.srt_path else _job_paths(job_id)[0] / "vi_final.srt"
+    if not vi_final_path.exists():
+        raise HTTPException(404, "Vietnamese subtitle not found")
+
+    edited_path = _edited_vi_path(job_id)
+    user_edits_path = _user_edits_path(job_id)
+    original_vi_cues = load_srt(vi_final_path)
+    payload = write_user_edits(job_id, user_edits_path, original_vi_cues, original_vi_cues)
+    if edited_path.exists():
+        edited_path.unlink()
+
+    return {"job_id": job_id, "reset_all": True, "has_edits": bool(payload["edits"])}
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

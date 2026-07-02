@@ -5,6 +5,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 STATE_FILE="$ROOT/.sa_bridge/state.json"
 CTL="$ROOT/scripts/sa_bridge_ctl.py"
+HOOK_PAYLOAD="$(cat 2>/dev/null || true)"
+
+hook_status="completed"
+if [[ -n "$HOOK_PAYLOAD" ]] && command -v python3 >/dev/null 2>&1; then
+  hook_status="$(HOOK_PAYLOAD="$HOOK_PAYLOAD" python3 - <<'PY'
+import json
+import os
+
+payload = os.environ.get("HOOK_PAYLOAD", "").strip()
+if not payload:
+    print("completed")
+else:
+    try:
+        data = json.loads(payload)
+    except Exception:
+        print("completed")
+    else:
+        print((data.get("status") or "completed").strip())
+PY
+)"
+fi
 
 if [[ ! -f "$STATE_FILE" ]]; then
   exit 0
@@ -16,6 +37,11 @@ fi
 
 loop_active="$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('loop_active', False))" 2>/dev/null || echo false)"
 if [[ "$loop_active" != "True" && "$loop_active" != "true" ]]; then
+  exit 0
+fi
+
+if [[ "$hook_status" == "aborted" ]]; then
+  python3 "$CTL" disarm --reason "Cursor Stop button pressed" >/dev/null
   exit 0
 fi
 

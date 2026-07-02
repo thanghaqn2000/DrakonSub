@@ -239,6 +239,31 @@ def _run_en_vi_pipeline(
     with open(vi_raw_path, encoding="utf-8") as f:
         vi_raw_entries = parse_srt(f.read())
 
+    from .config import get_raw_translation_mode, post_raw_overlap_guard_enabled
+
+    if post_raw_overlap_guard_enabled():
+        from .post_raw_overlap_guard import guard_post_raw_overlap
+
+        vi_raw_entries, _overlap_report = guard_post_raw_overlap(
+            source_entries,
+            vi_raw_entries,
+            topic=config.translation_topic,
+            debug_dir=str(debug_dir),
+        )
+        save_srt_entries(vi_raw_path, vi_raw_entries)
+
+    if get_raw_translation_mode() == "cue_keyed":
+        from .raw_translation_alignment_guard import guard_and_repair_raw_translations
+
+        vi_raw_entries, _guard_report = guard_and_repair_raw_translations(
+            source_entries,
+            vi_raw_entries,
+            topic=config.translation_topic,
+            debug_dir=str(debug_dir),
+        )
+        save_srt_entries(vi_raw_path, vi_raw_entries)
+    # hybrid_guarded / span_guarded: guard+repair runs inside translate path
+
     def _retry_translate() -> list:
         nonlocal translation_retry_applied
         translation_retry_applied = True

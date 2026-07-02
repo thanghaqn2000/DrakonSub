@@ -6,11 +6,13 @@ from typing import Dict, List, Optional
 from .config import (
     get_openai_model,
     get_phrase_group_max_cues,
+    get_raw_translation_mode,
     get_translation_batch_size,
     translation_polish_enabled,
 )
 from .translation_topics import TOPICS, build_polish_system_prompt, build_system_prompt, normalize_topic
 from .openai_chat import create_chat_completion
+from .raw_llm_response_cache import raw_llm_complete
 from .translation_prompt_context import enrich_user_prompt
 
 # Punctuation that signals the end of a sentence / phrase group.
@@ -428,18 +430,22 @@ def _call_openai_translate_grouped(
             encoding="utf-8",
         )
 
-    response = create_chat_completion(
+    response_content = raw_llm_complete(
         client,
         model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        llm_task_type="raw_grouped_translate",
+        batch_indices=[i + 1 for i in batch_local_indices],
+        source_texts=source_segments,
+        repair=repair,
         temperature=0.35 if repair else 0.4,
         response_format={"type": "json_object"},
     )
     translations = _parse_indexed_translations(
-        response.choices[0].message.content or "",
+        response_content,
         len(source_segments),
     )
     _validate_translation_output(translations, source_segments)
@@ -815,6 +821,93 @@ def translate_srt_entries_openai(
         )
 
     topic = normalize_topic(topic or os.environ.get("TRANSLATION_TOPIC"))
+
+    if get_raw_translation_mode() == "cue_keyed":
+        from .raw_cue_keyed_translate import translate_srt_entries_cue_keyed_openai
+
+        result, _stats = translate_srt_entries_cue_keyed_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            topic=topic,
+            batch_size=batch_size,
+        )
+        return result
+
+    if get_raw_translation_mode() == "hybrid_guarded":
+        from .raw_hybrid_guarded_translate import translate_srt_entries_hybrid_openai
+
+        return translate_srt_entries_hybrid_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            batch_size=batch_size,
+            topic=topic,
+            polish=polish,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
+
+    if get_raw_translation_mode() == "span_guarded":
+        from .raw_span_guarded_translate import translate_srt_entries_span_guarded_openai
+
+        return translate_srt_entries_span_guarded_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            batch_size=batch_size,
+            topic=topic,
+            polish=polish,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
+
+    if get_raw_translation_mode() == "span_guarded_conservative":
+        from .raw_span_guarded_translate import (
+            translate_srt_entries_span_guarded_conservative_openai,
+        )
+
+        return translate_srt_entries_span_guarded_conservative_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            batch_size=batch_size,
+            topic=topic,
+            polish=polish,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
+
+    if get_raw_translation_mode() == "span_guarded_tiered":
+        from .raw_span_guarded_translate import (
+            translate_srt_entries_span_guarded_tiered_openai,
+        )
+
+        return translate_srt_entries_span_guarded_tiered_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            batch_size=batch_size,
+            topic=topic,
+            polish=polish,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
+
+    if get_raw_translation_mode() == "longform_chunked":
+        from .longform_chunked_translate import translate_srt_entries_longform_chunked_openai
+
+        return translate_srt_entries_longform_chunked_openai(
+            entries,
+            target_lang=target_lang,
+            model=model,
+            batch_size=batch_size,
+            topic=topic,
+            polish=polish,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
+
     client = OpenAI(api_key=api_key)
     model = model or get_openai_model()
     batch_size = batch_size or get_translation_batch_size()

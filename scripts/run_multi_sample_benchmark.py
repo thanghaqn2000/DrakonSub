@@ -23,10 +23,12 @@ import importlib.util
 
 from scripts.benchmark_raw_cache import (
     cache_key as raw_cache_key,
+    diagnose_cache,
     load_cached_vi_raw,
     mode_type_for,
     save_cached_vi_raw,
     score_interpretation,
+    write_integrity_report,
 )
 
 _audit_path = ROOT / "scripts" / "run_cue_mapping_audit.py"
@@ -52,8 +54,11 @@ class BenchmarkFlags:
     cache_raw: bool = False
     use_raw_cache: bool = False
     only_sample: Optional[str] = None
+    only_samples: Optional[List[str]] = None
     benchmark_mode: str = "default"  # default | pipeline_regression | end_to_end
     deterministic: bool = False
+    raw_translation_mode: Optional[str] = None
+    raw_llm_cache: bool = False
 
 
 def _parse_flags(argv: List[str]) -> BenchmarkFlags:
@@ -65,10 +70,17 @@ def _parse_flags(argv: List[str]) -> BenchmarkFlags:
         if idx + 1 < len(argv):
             engine = argv[idx + 1].strip().lower()
     only = None
+    only_list: Optional[List[str]] = None
+    if "--samples" in argv:
+        idx = argv.index("--samples")
+        if idx + 1 < len(argv):
+            only_list = [s.strip() for s in argv[idx + 1].split(",") if s.strip()]
+            only = only_list[0] if len(only_list) == 1 else None
     if "--sample" in argv:
         idx = argv.index("--sample")
         if idx + 1 < len(argv):
             only = argv[idx + 1]
+            only_list = [only]
     mode = "default"
     if "--both-modes" in argv:
         mode = "both"
@@ -77,6 +89,11 @@ def _parse_flags(argv: List[str]) -> BenchmarkFlags:
         idx = argv.index(flag)
         if idx + 1 < len(argv):
             mode = argv[idx + 1].strip().lower()
+    raw_mode = None
+    if "--raw-translation-mode" in argv:
+        idx = argv.index("--raw-translation-mode")
+        if idx + 1 < len(argv):
+            raw_mode = argv[idx + 1].strip().lower()
     return BenchmarkFlags(
         requested_engine=engine,
         force_fresh="--fresh" in argv,
@@ -84,8 +101,11 @@ def _parse_flags(argv: List[str]) -> BenchmarkFlags:
         cache_raw="--cache-raw" in argv,
         use_raw_cache="--use-raw-cache" in argv,
         only_sample=only,
+        only_samples=only_list,
         benchmark_mode=mode,
         deterministic="--deterministic" in argv,
+        raw_translation_mode=raw_mode,
+        raw_llm_cache="--raw-llm-cache" in argv,
     )
 
 
@@ -168,11 +188,19 @@ def _prepare_sample_debug(
     out_dir: Path,
     *,
     flags: BenchmarkFlags,
-) -> Tuple[Optional[Path], bool, bool, Optional[str]]:
+) -> Tuple[Optional[Path], bool, bool, Optional[str], Dict[str, Any]]:
     job_dir = jobs_root / sample["job_id"]
     source = job_dir / "source.srt"
+    cache_meta: Dict[str, Any] = {
+        "cache_hit": False,
+        "miss_reason": "",
+        "fallback_used": False,
+        "fallback_reason": "",
+        "raw_source": "fresh_translate",
+    }
     if not source.exists():
-        return None, False, False, None
+        cache_meta["miss_reason"] = "source_hash_mismatch"
+        return None, False, False, None, cache_meta
 
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -184,28 +212,61 @@ def _prepare_sample_debug(
     reuse_raw = False
     used_raw_cache = False
     key: Optional[str] = None
+    raw_mode = flags.raw_translation_mode or "grouped"
 
-    if flags.force_fresh:
-        reuse_raw = False
-    elif flags.reuse_raw_manifest or sample.get("reuse_raw"):
+    if not flags.force_fresh and flags.use_raw_cache:
+        cached = load_cached_vi_raw(
+            sid, source, flags.requested_engine, raw_translation_mode=raw_mode
+        )
+        if cached:
+            shutil.copy2(cached, out_dir / "vi_raw.srt")
+            reuse_raw = True
+            used_raw_cache = True
+            key = raw_cache_key(source, flags.requested_engine, raw_mode)
+            cache_meta.update(
+                {
+                    "cache_hit": True,
+                    "raw_source": "raw_cache",
+                    "raw_cache_path": str(cached),
+                }
+            )
+        else:
+            cache_meta["miss_reason"] = "raw_file_missing"
+
+    if not reuse_raw and not flags.force_fresh and (
+        flags.reuse_raw_manifest or sample.get("reuse_raw")
+    ):
         job_raw = job_dir / "vi_raw.srt"
         baseline_raw = DEBUG_BASELINE / "vi_raw.srt"
         if sample["id"] == "buffett_bitcoin_29" and baseline_raw.exists():
             shutil.copy2(baseline_raw, out_dir / "vi_raw.srt")
             reuse_raw = True
+            cache_meta.update(
+                {
+                    "fallback_used": True,
+                    "fallback_reason": "debug_baseline_vi_raw",
+                    "raw_source": "debug_baseline",
+                }
+            )
+            if flags.use_raw_cache:
+                cache_meta["miss_reason"] = cache_meta.get("miss_reason") or "path_resolution_bug"
         elif job_raw.exists():
             shutil.copy2(job_raw, out_dir / "vi_raw.srt")
             reuse_raw = True
+            cache_meta.update(
+                {
+                    "fallback_used": True,
+                    "fallback_reason": "job_vi_raw_manifest",
+                    "raw_source": "job_manifest",
+                }
+            )
+            if flags.use_raw_cache:
+                cache_meta["miss_reason"] = cache_meta.get("miss_reason") or "manifest_missing"
 
-    if not reuse_raw and not flags.force_fresh and flags.use_raw_cache:
-        cached = load_cached_vi_raw(sid, source, flags.requested_engine)
-        if cached:
-            shutil.copy2(cached, out_dir / "vi_raw.srt")
-            reuse_raw = True
-            used_raw_cache = True
-            key = raw_cache_key(source, flags.requested_engine)
+    if flags.force_fresh:
+        cache_meta["raw_source"] = "fresh_translate"
 
-    return source, reuse_raw, used_raw_cache, key
+    return source, reuse_raw, used_raw_cache, key, cache_meta
 
 
 def _write_summary(report: dict, path: Path) -> None:
@@ -263,13 +324,22 @@ def _run_benchmark_pass(
     import os
 
     os.environ["TRANSLATION_ENGINE"] = flags.requested_engine
+    if pass_flags.raw_translation_mode:
+        os.environ["RAW_TRANSLATION_MODE"] = pass_flags.raw_translation_mode
+    else:
+        os.environ.pop("RAW_TRANSLATION_MODE", None)
     if pass_flags.deterministic:
         os.environ["BENCHMARK_DETERMINISTIC"] = "1"
     else:
         os.environ.pop("BENCHMARK_DETERMINISTIC", None)
+    if pass_flags.raw_llm_cache:
+        os.environ["RAW_LLM_RESPONSE_CACHE"] = "1"
+    else:
+        os.environ.pop("RAW_LLM_RESPONSE_CACHE", None)
     results: List[dict] = []
     engine_samples: List[dict] = []
     engine_valid = True
+    integrity_rows: List[dict] = []
 
     for sample in samples:
         sid = sample["id"]
@@ -278,13 +348,32 @@ def _run_benchmark_pass(
             f"\n[Benchmark:{pass_name}] === {sid} ({sample.get('cue_count')} cues) "
             f"engine={pass_flags.requested_engine} ==="
         )
-        source, reuse_raw, used_raw_cache, cache_key = _prepare_sample_debug(
+        os.environ["BENCHMARK_SAMPLE_ID"] = sid
+        source, reuse_raw, used_raw_cache, cache_key, sample_cache_meta = _prepare_sample_debug(
             sample, jobs_root, out_dir, flags=pass_flags
         )
         if source is None:
             print(f"[Benchmark] SKIP {sid}: missing source.srt")
             results.append({"id": sid, "status": "missing_source", "job_id": sample["job_id"]})
             continue
+
+        raw_mode = pass_flags.raw_translation_mode or "grouped"
+        integrity_row = diagnose_cache(
+            sid,
+            source,
+            pass_flags.requested_engine,
+            raw_mode,
+            manifest_cache_key=cache_key,
+        )
+        integrity_row["deterministic"] = pass_flags.deterministic
+        integrity_row["cache_hit"] = sample_cache_meta.get("cache_hit", used_raw_cache)
+        if sample_cache_meta.get("fallback_used"):
+            integrity_row["cache_hit"] = False
+            integrity_row["miss_reason"] = sample_cache_meta.get("miss_reason") or "path_resolution_bug"
+            integrity_row["fallback_used"] = True
+            integrity_row["fallback_reason"] = sample_cache_meta.get("fallback_reason", "")
+        integrity_row["raw_source"] = sample_cache_meta.get("raw_source", "")
+        integrity_rows.append(integrity_row)
 
         mode_type = mode_type_for(
             reuse_raw=reuse_raw,
@@ -312,10 +401,17 @@ def _run_benchmark_pass(
                         source,
                         pass_flags.requested_engine,
                         vi_raw,
+                        raw_translation_mode=raw_mode,
+                        deterministic=pass_flags.deterministic,
                         extra={"benchmark_pass": pass_name},
                     )
                     if not cache_key:
-                        cache_key = raw_cache_key(source, pass_flags.requested_engine)
+                        cache_key = raw_cache_key(
+                            source, pass_flags.requested_engine, raw_mode
+                        )
+                    integrity_row["cache_hit"] = True
+                    integrity_row["miss_reason"] = ""
+                    integrity_row["fix_applied"] = "cache_written_e2e"
 
             mode = run_meta.get("translation_mode", "fresh_translate")
             effective = run_meta.get("translation_engine_effective", pass_flags.requested_engine)
@@ -353,7 +449,15 @@ def _run_benchmark_pass(
                 effective if status == "ok" else pass_flags.requested_engine
             ),
             "raw_translation_cache_key": cache_key,
-            "raw_translation_cached": used_raw_cache,
+            "raw_translation_mode": raw_mode,
+            "raw_translation_cached": used_raw_cache or (
+                pass_flags.cache_raw and status == "ok"
+            ),
+            "cache_hit": sample_cache_meta.get("cache_hit", used_raw_cache),
+            "miss_reason": sample_cache_meta.get("miss_reason", ""),
+            "fallback_used": sample_cache_meta.get("fallback_used", False),
+            "fallback_reason": sample_cache_meta.get("fallback_reason", ""),
+            "raw_source": sample_cache_meta.get("raw_source", ""),
             "score_interpretation": score_interpretation(mode_type),
         }
         entry = {
@@ -367,10 +471,13 @@ def _run_benchmark_pass(
         }
         results.append(entry)
         if status == "ok":
+            hit = benchmark_mode_meta.get("cache_hit")
+            fb = benchmark_mode_meta.get("fallback_used")
             print(
                 f"[Benchmark:{pass_name}] {sid}: mode_type={mode_type} "
                 f"quality={metrics.get('quality_score')} "
-                f"semantic={metrics.get('semantic_alignment_errors')} ({elapsed}s)"
+                f"semantic={metrics.get('semantic_alignment_errors')} "
+                f"cache_hit={hit} fallback={fb} ({elapsed}s)"
             )
 
     ok = [r for r in results if r.get("status") == "ok"]
@@ -404,6 +511,15 @@ def _run_benchmark_pass(
             "total_risky_cues": sum(r["metrics"].get("risky_cue_count") or 0 for r in ok),
         },
     }
+    if integrity_rows:
+        for row in integrity_rows:
+            row["fix_applied"] = row.get("fix_applied") or "cache_priority_use_raw_cache_first"
+        report["raw_cache_integrity"] = {
+            "cache_hit_count": sum(1 for r in integrity_rows if r.get("cache_hit")),
+            "cache_miss_count": sum(1 for r in integrity_rows if not r.get("cache_hit")),
+            "samples": integrity_rows,
+        }
+        write_integrity_report(integrity_rows)
     return report, 0 if all(r.get("status") == "ok" for r in results) else 1
 
 
@@ -439,6 +555,26 @@ def _run_diagnosis_scripts() -> None:
             subprocess.run([sys.executable, str(script)], check=False, cwd=str(ROOT))
 
 
+def _resolve_samples(manifest: dict, flags: BenchmarkFlags) -> List[dict]:
+    samples: List[dict] = list(manifest.get("samples", []))
+    deferred = manifest.get("deferred", [])
+    wanted: Optional[set] = None
+    if flags.only_samples:
+        wanted = set(flags.only_samples)
+    elif flags.only_sample:
+        wanted = {flags.only_sample}
+    if wanted:
+        by_id = {s["id"]: s for s in samples}
+        for d in deferred:
+            if d["id"] in wanted and d["id"] not in by_id:
+                by_id[d["id"]] = d
+        samples = [by_id[i] for i in wanted if i in by_id]
+        missing = wanted - set(by_id)
+        if missing:
+            raise SystemExit(f"Unknown sample id(s): {', '.join(sorted(missing))}")
+    return samples
+
+
 def main() -> int:
     import os
 
@@ -451,12 +587,11 @@ def main() -> int:
 
     manifest = _load_manifest()
     jobs_root = Path(manifest["jobs_root"])
-    samples: List[dict] = manifest["samples"]
-    if flags.only_sample:
-        samples = [s for s in samples if s["id"] == flags.only_sample]
-        if not samples:
-            print(f"Unknown sample id: {flags.only_sample}", file=sys.stderr)
-            return 1
+    try:
+        samples = _resolve_samples(manifest, flags)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
     exit_code = 0
     engine_samples_all: List[dict] = []
@@ -467,6 +602,9 @@ def main() -> int:
             force_fresh=True,
             cache_raw=True,
             only_sample=flags.only_sample,
+            raw_translation_mode=flags.raw_translation_mode,
+            deterministic=flags.deterministic,
+            raw_llm_cache=flags.raw_llm_cache,
         )
         e2e_root = OUT_ROOT / "end_to_end"
         report, code = _run_benchmark_pass(
@@ -479,8 +617,9 @@ def main() -> int:
         pf = BenchmarkFlags(
             requested_engine=flags.requested_engine,
             use_raw_cache=True,
-            reuse_raw_manifest=True,
+            reuse_raw_manifest=False,
             only_sample=flags.only_sample,
+            raw_translation_mode=flags.raw_translation_mode,
             deterministic=flags.deterministic,
         )
         pr_root = OUT_ROOT / "pipeline_regression"

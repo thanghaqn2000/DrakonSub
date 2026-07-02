@@ -154,6 +154,13 @@ def _detect_split_term_issue(
     return False
 
 
+def _is_source_fragment(source: str) -> bool:
+    s = source.strip()
+    if not s:
+        return False
+    return not s.rstrip().endswith((".", "?", "!")) or len(s.split()) <= 6
+
+
 def _detect_cue_assessment(
     cue_idx: int,
     source: str,
@@ -190,7 +197,12 @@ def _detect_cue_assessment(
     dur = _cue_duration(entry)
     cps_val = _cps(text, dur)
     if cps_val > _DEFAULT_RISKY_CPS:
-        errors.append("readability_cps_error")
+        if not (
+            dur < 0.8
+            and _is_source_fragment(src)
+            and len(text) <= 42
+        ):
+            errors.append("readability_cps_error")
 
     for pat in _LITERAL_PATTERNS:
         if pat.search(text):
@@ -359,6 +371,19 @@ def analyze_translation_quality(
                 detected_errors.append("repeated_meaning_error")
             alignment_reasons.setdefault(i, []).append(repeated_meaning[i])
 
+        from .qa_calibration import apply_qa_calibration
+
+        detected_errors, alignment_warnings, calibration_notes = apply_qa_calibration(
+            i,
+            src,
+            vi,
+            vi_e,
+            source_texts,
+            vi_texts,
+            detected_errors,
+            alignment_warnings,
+        )
+
         if src.strip() and not vi.strip():
             empty_count += 1
 
@@ -381,6 +406,7 @@ def analyze_translation_quality(
             "detected_translation_errors": detected_errors,
             "alignment_warnings": alignment_warnings,
             "alignment_reasons": alignment_reasons.get(i, []),
+            "calibration_notes": calibration_notes,
             "is_risky": bool(detected_errors),
         }
         cue_assessments.append(assessment)

@@ -68,6 +68,17 @@ VI_EDITOR_OPENAI_FEW_SHOT_ENABLED = False
 # Maximum consecutive cues per phrase group sent to GPT.
 # Smaller = more groups (more API calls), larger = more context per call.
 DEFAULT_MAX_CUES_PER_GROUP = 6
+RAW_TRANSLATION_MODES = (
+    "grouped",
+    "cue_keyed",
+    "hybrid_guarded",
+    "span_guarded",
+    "span_guarded_conservative",
+    "span_guarded_tiered",
+    "longform_chunked",
+)
+DEFAULT_RAW_TRANSLATION_MODE = "grouped"
+POST_RAW_OVERLAP_GUARD_ENABLED = True
 
 # Models that fail on chat/completions — map to the closest supported tier.
 OPENAI_MODEL_ALIASES = {
@@ -112,6 +123,17 @@ def get_phrase_group_max_cues() -> int:
     load_env()
     value = int(os.getenv("PHRASE_GROUP_MAX_CUES", str(DEFAULT_MAX_CUES_PER_GROUP)))
     return max(1, min(value, 20))
+
+
+def get_raw_translation_mode() -> str:
+    load_env()
+    raw = (os.getenv("RAW_TRANSLATION_MODE") or DEFAULT_RAW_TRANSLATION_MODE).strip().lower()
+    if raw not in RAW_TRANSLATION_MODES:
+        valid = ", ".join(RAW_TRANSLATION_MODES)
+        raise ValueError(
+            f"Unsupported RAW_TRANSLATION_MODE '{raw}'. Choose one of: {valid}"
+        )
+    return raw
 
 
 def translation_polish_enabled() -> bool:
@@ -206,6 +228,16 @@ def vi_flow_enabled() -> bool:
 
 def translation_intelligence_enabled() -> bool:
     return TRANSLATION_INTELLIGENCE_ENABLED
+
+
+def post_raw_overlap_guard_enabled() -> bool:
+    load_env()
+    raw = (os.getenv("POST_RAW_OVERLAP_GUARD_ENABLED") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return POST_RAW_OVERLAP_GUARD_ENABLED
 
 
 def translation_intelligence_save_debug() -> bool:

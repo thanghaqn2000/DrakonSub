@@ -312,14 +312,68 @@ def _run_pipeline_stages(
         used_cached_raw = True
         meta["notes"].append("Reused existing vi_raw.srt")
     else:
+        import hashlib
+
+        from auto_subtitle.raw_llm_response_cache import reset_call_log, set_raw_llm_context
+
+        vctx_hash = ""
+        if video_context_path.exists():
+            vctx_hash = hashlib.sha256(
+                video_context_path.read_bytes()
+            ).hexdigest()[:16]
+        set_raw_llm_context(
+            sample_id=os.environ.get("BENCHMARK_SAMPLE_ID") or debug.name,
+            source_hash=hashlib.sha256(source_path.read_bytes()).hexdigest()[:16],
+            video_context_hash=vctx_hash,
+            run_id=os.environ.get("BENCHMARK_RUN_ID", ""),
+        )
+        reset_call_log()
         translate_srt_file(
             str(source_corrected_path),
             str(vi_raw_path),
             config,
             translation_context=translation_context,
         )
+        from auto_subtitle.raw_llm_response_cache import flush_cache_report
+
+        flush_cache_report()
         vi_raw_entries = _load_srt(vi_raw_path)
     meta["translation_mode"] = "reuse_raw" if used_cached_raw else "fresh_translate"
+    meta["raw_translation_mode"] = __import__("os").environ.get(
+        "RAW_TRANSLATION_MODE", "grouped"
+    )
+
+    from auto_subtitle.config import get_raw_translation_mode
+
+    if get_raw_translation_mode() == "cue_keyed" and not used_cached_raw:
+        from auto_subtitle.raw_translation_alignment_guard import (
+            guard_and_repair_raw_translations,
+        )
+
+        vi_raw_entries, _guard_report = guard_and_repair_raw_translations(
+            source_entries,
+            vi_raw_entries,
+            topic=config.translation_topic,
+            debug_dir=str(debug),
+        )
+        save_srt_entries(vi_raw_path, vi_raw_entries)
+        meta["notes"].append("Applied raw_translation_alignment_guard on vi_raw")
+    # hybrid_guarded / span_guarded: repair integrated in translate path
+
+    from auto_subtitle.config import post_raw_overlap_guard_enabled
+
+    if post_raw_overlap_guard_enabled():
+        from auto_subtitle.post_raw_overlap_guard import guard_post_raw_overlap
+
+        vi_raw_entries, _overlap_report = guard_post_raw_overlap(
+            source_entries,
+            vi_raw_entries,
+            topic=config.translation_topic,
+            debug_dir=str(debug),
+        )
+        save_srt_entries(vi_raw_path, vi_raw_entries)
+        meta["notes"].append("Applied post_raw_overlap_guard on vi_raw")
+
     meta["translation_engine_effective"] = (
         "cached_raw" if used_cached_raw else config.translation_engine
     )

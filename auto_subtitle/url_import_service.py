@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import ipaddress
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 MAX_DURATION_SECONDS = 30 * 60
 MAX_FILE_BYTES = 500 * 1024 * 1024
@@ -26,10 +25,28 @@ FACEBOOK_HOSTS = frozenset(
     }
 )
 
-FACEBOOK_PATH_HINTS = ("/videos/", "/video/", "/reel/", "/reels/", "/watch", "/share/")
-
+FACEBOOK_UNSUPPORTED_PATH_RE = re.compile(
+    r"(?:^|/)"
+    r"(?:profile\.php|posts?/|photo/?|photos/|groups/|events/|marketplace/|people/)"
+    r"(?:/|$|\?)",
+    re.IGNORECASE,
+)
 
 PROVIDER_MISMATCH_MESSAGE = "Link không khớp với nguồn đã chọn."
+FACEBOOK_UNSUPPORTED_MESSAGE = (
+    "Link Facebook này chưa được hỗ trợ. Vui lòng dùng link video, reel hoặc fb.watch công khai."
+)
+FACEBOOK_DOWNLOAD_FAIL_MESSAGE = (
+    "Không thể tải video Facebook này. Video có thể riêng tư, bị giới hạn hoặc cần đăng nhập."
+)
+GENERIC_UNSUPPORTED_MESSAGE = (
+    "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
+)
+
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 class UrlImportError(ValueError):
@@ -40,6 +57,38 @@ def _normalize_host(url: str) -> str:
     parsed = urlparse(url.strip())
     host = (parsed.hostname or "").lower().rstrip(".")
     return host
+
+
+def _is_fb_watch_host(host: str) -> bool:
+    return host in {"fb.watch", "www.fb.watch"} or host.endswith(".fb.watch")
+
+
+def _is_facebook_video_url(url: str) -> bool:
+    """Return True when URL looks like a supported public Facebook video/reel/watch link."""
+    parsed = urlparse(url.strip())
+    host = _normalize_host(url)
+    if host not in FACEBOOK_HOSTS and not _is_fb_watch_host(host):
+        return False
+
+    if _is_fb_watch_host(host):
+        return bool((parsed.path or "").strip("/"))
+
+    path = (parsed.path or "").lower()
+    if FACEBOOK_UNSUPPORTED_PATH_RE.search(path):
+        return False
+
+    if re.search(r"/videos/\d+", path):
+        return True
+    if re.search(r"/reel[s]?/\d+", path):
+        return True
+    if re.search(r"/share/[vr]/[^/]+", path):
+        return True
+    if "/video/" in path or path.endswith("/video"):
+        return True
+    if path.rstrip("/") == "/watch":
+        query = parse_qs(parsed.query or "")
+        return bool(query.get("v", [""])[0].isdigit())
+    return False
 
 
 def _host_is_blocked(host: str) -> bool:
@@ -67,20 +116,11 @@ def detect_provider(url: str) -> str:
     host = _normalize_host(url)
     if host in YOUTUBE_HOSTS:
         return "youtube"
-    if host in FACEBOOK_HOSTS:
-        path = (urlparse(url.strip()).path or "").lower()
-        if host.startswith("fb.watch") or host == "fb.watch":
+    if host in FACEBOOK_HOSTS or _is_fb_watch_host(host):
+        if _is_facebook_video_url(url):
             return "facebook"
-        if any(hint in path for hint in FACEBOOK_PATH_HINTS):
-            return "facebook"
-        if re.search(r"/reel[s]?/", path):
-            return "facebook"
-        raise UrlImportError(
-            "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
-        )
-    raise UrlImportError(
-        "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
-    )
+        raise UrlImportError(FACEBOOK_UNSUPPORTED_MESSAGE)
+    raise UrlImportError(GENERIC_UNSUPPORTED_MESSAGE)
 
 
 def validate_video_url(url: str) -> str:
@@ -91,15 +131,11 @@ def validate_video_url(url: str) -> str:
 
     parsed = urlparse(raw)
     if parsed.scheme not in ("http", "https"):
-        raise UrlImportError(
-            "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
-        )
+        raise UrlImportError(GENERIC_UNSUPPORTED_MESSAGE)
 
     host = _normalize_host(raw)
     if _host_is_blocked(host):
-        raise UrlImportError(
-            "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
-        )
+        raise UrlImportError(GENERIC_UNSUPPORTED_MESSAGE)
 
     detect_provider(raw)
     return raw
@@ -117,19 +153,50 @@ def validate_url_with_selected_provider(url: str, selected_provider: str) -> tup
     return safe_url, detected
 
 
-def _map_download_error(exc: Exception) -> UrlImportError:
+def _map_download_error(exc: Exception, provider: Optional[str] = None) -> UrlImportError:
     text = str(exc).lower()
-    if "private" in text or "login" in text or "sign in" in text or "cookies" in text:
+    restricted = any(
+        token in text
+        for token in (
+            "private",
+            "login",
+            "sign in",
+            "cookies",
+            "restricted",
+            "not available",
+            "confirm your age",
+            "age-restricted",
+        )
+    )
+    if provider == "facebook":
+        if restricted:
+            return UrlImportError(FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
+        if "unsupported url" in text or "no video" in text:
+            return UrlImportError(FACEBOOK_UNSUPPORTED_MESSAGE)
+        return UrlImportError(FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
+
+    if restricted:
         return UrlImportError(
             "Không thể tải video này. Video có thể riêng tư, bị giới hạn hoặc cần đăng nhập."
         )
     if "unsupported url" in text or "unsupported" in text:
-        return UrlImportError(
-            "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
-        )
+        return UrlImportError(GENERIC_UNSUPPORTED_MESSAGE)
     return UrlImportError(
         "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
     )
+
+
+def cleanup_partial_downloads(output_dir: str | Path) -> None:
+    """Remove incomplete downloaded files from a failed import attempt."""
+    out_dir = Path(output_dir)
+    if not out_dir.is_dir():
+        return
+    for pattern in ("input.*", "*.part", "*.ytdl"):
+        for path in out_dir.glob(pattern):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _resolve_downloaded_path(output_dir: Path, requested: Path) -> Path:
@@ -141,6 +208,24 @@ def _resolve_downloaded_path(output_dir: Path, requested: Path) -> Path:
             "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
         )
     return candidates[0]
+
+
+def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
+    opts: Dict[str, Any] = {
+        "format": "bv*+ba/b[ext=mp4]/b",
+        "merge_output_format": "mp4",
+        "outtmpl": str(out_dir / "input.%(ext)s"),
+        "noplaylist": True,
+        "max_filesize": MAX_FILE_BYTES,
+        "socket_timeout": 30,
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": False,
+        "http_headers": {"User-Agent": _DEFAULT_USER_AGENT},
+    }
+    if provider == "youtube":
+        opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    return opts
 
 
 def download_video_from_url(
@@ -161,26 +246,15 @@ def download_video_from_url(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / output_filename
-    if target.exists():
-        target.unlink()
+    cleanup_partial_downloads(out_dir)
 
-    ydl_opts = {
-        "format": "bv*+ba/b[ext=mp4]/b",
-        "merge_output_format": "mp4",
-        "outtmpl": str(out_dir / "input.%(ext)s"),
-        "noplaylist": True,
-        "max_filesize": MAX_FILE_BYTES,
-        "socket_timeout": 30,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": False,
-        # YouTube often 403s default web client; android+web fallback is yt-dlp recommended.
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-    }
+    ydl_opts = _build_ydl_opts(out_dir, provider)
+    info: Dict[str, Any] = {}
+    duration = 0
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(safe_url, download=False)
+            info = ydl.extract_info(safe_url, download=False) or {}
             duration = info.get("duration") or 0
             if duration and duration > MAX_DURATION_SECONDS:
                 raise UrlImportError(
@@ -188,9 +262,11 @@ def download_video_from_url(
                 )
             ydl.download([safe_url])
     except UrlImportError:
+        cleanup_partial_downloads(out_dir)
         raise
     except Exception as exc:
-        raise _map_download_error(exc) from exc
+        cleanup_partial_downloads(out_dir)
+        raise _map_download_error(exc, provider) from exc
 
     downloaded = _resolve_downloaded_path(out_dir, target)
     if downloaded.suffix.lower() != ".mp4":
@@ -201,17 +277,16 @@ def download_video_from_url(
         downloaded = final_path
 
     size = downloaded.stat().st_size
+    if size <= 0:
+        cleanup_partial_downloads(out_dir)
+        raise _map_download_error(RuntimeError("empty file"), provider)
     if size > MAX_FILE_BYTES:
-        downloaded.unlink(missing_ok=True)
+        cleanup_partial_downloads(out_dir)
         raise UrlImportError(
             "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
         )
 
-    title = ""
-    try:
-        title = str(info.get("title") or "").strip()
-    except Exception:
-        pass
+    title = str(info.get("title") or "").strip()
 
     return {
         "path": str(downloaded),

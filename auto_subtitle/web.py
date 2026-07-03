@@ -398,18 +398,28 @@ def _run_url_import_job(job_id: str, url: str) -> None:
             jobs[job_id].message = "Đã tải video thành công."
             jobs[job_id].progress = 100
     except UrlImportError as exc:
+        from .url_import_service import cleanup_partial_downloads
+
+        cleanup_partial_downloads(_job_paths(job_id)[0])
         with jobs_lock:
             jobs[job_id].status = JobStatus.ERROR
             jobs[job_id].error = str(exc)
             jobs[job_id].message = str(exc)
+            jobs[job_id].input_path = None
+            jobs[job_id].progress = 0
     except Exception:
+        from .url_import_service import cleanup_partial_downloads
+
         traceback.print_exc()
+        cleanup_partial_downloads(_job_paths(job_id)[0])
         with jobs_lock:
             jobs[job_id].status = JobStatus.ERROR
             jobs[job_id].error = (
                 "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
             )
             jobs[job_id].message = jobs[job_id].error
+            jobs[job_id].input_path = None
+            jobs[job_id].progress = 0
 
 
 def _run_job(job_id: str) -> None:

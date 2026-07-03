@@ -61,7 +61,7 @@ class SubtitleConfig:
     subtitle_padding_x: int = 28
     subtitle_padding_y: int = 16
     subtitle_text_safe_padding_y: int = 12
-    subtitle_background_opacity: float = 0.92
+    subtitle_background_opacity: float = 1.0
     subtitle_max_width_ratio: float = 0.86
     subtitle_line_spacing: float = 1.15
     subtitle_bottom_margin_ratio: float = 0.11
@@ -100,7 +100,7 @@ class SubtitleConfig:
             subtitle_padding_x=_env_int("SUBTITLE_PADDING_X", 28),
             subtitle_padding_y=_env_int("SUBTITLE_PADDING_Y", 16),
             subtitle_text_safe_padding_y=_env_int("SUBTITLE_TEXT_SAFE_PADDING_Y", 12),
-            subtitle_background_opacity=_env_float("SUBTITLE_BACKGROUND_OPACITY", 0.92),
+            subtitle_background_opacity=_env_float("SUBTITLE_BACKGROUND_OPACITY", 1.0),
             subtitle_max_width_ratio=_env_float("SUBTITLE_MAX_WIDTH_RATIO", 0.86),
             subtitle_line_spacing=_env_float("SUBTITLE_LINE_SPACING", 1.15),
             subtitle_bottom_margin_ratio=bottom_margin_ratio,

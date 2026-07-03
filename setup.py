@@ -25,5 +25,5 @@ setup(
             'drakonsub-web=auto_subtitle.web:main',
         ],
     },
-    package_data={'auto_subtitle': ['static/*']},
+    package_data={'auto_subtitle': ['static/*', 'fonts/*']},
 )

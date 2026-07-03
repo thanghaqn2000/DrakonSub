@@ -80,6 +80,7 @@ class SubtitleRenderStyle:
     x_ratio: Optional[float] = None       # box center X (0–1); None = bottom-center legacy
     y_ratio: Optional[float] = None       # box center Y (0–1); None = bottom-center legacy
     font_family: str = "arial_bold"      # preset key; see FONT_PRESETS
+    font_bold: bool = True                # bold weight for subtitle text
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize style to a JSON-friendly layout dict."""
@@ -106,6 +107,8 @@ class SubtitleRenderStyle:
                 kwargs[key] = value
         if "max_width_ratio" not in kwargs and "max_width_ratio" in data:
             kwargs["max_width_ratio"] = float(data["max_width_ratio"])
+        if "font_bold" not in kwargs:
+            kwargs["font_bold"] = resolve_font_bold(data)
         return cls(**{k: v for k, v in kwargs.items() if k in known})
 
     def uses_custom_position(self) -> bool:
@@ -130,6 +133,7 @@ def default_layout_dict() -> Dict[str, Any]:
         "padding_x": style.padding_x,
         "padding_y": style.padding_y,
         "font_family": style.font_family,
+        "font_bold": style.font_bold,
     }
 
 
@@ -272,6 +276,33 @@ def resolve_background_visible(layout: Optional[Dict[str, Any]] = None) -> bool:
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)
 
+
+def resolve_font_bold(
+    layout: Optional[Dict[str, Any]] = None,
+    font_family: Optional[str] = None,
+) -> bool:
+    """True when subtitle text should use bold weight; missing key => infer from font_family."""
+    family = (font_family or (layout or {}).get("font_family") or "arial_bold").strip().lower()
+    if layout and "font_bold" in layout:
+        value = layout["font_bold"]
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    return family.endswith("_bold")
+
+
+def _font_preset_key(font_family: str, font_bold: bool) -> str:
+    """Map layout font + bold toggle to a FONT_PRESETS key."""
+    base = (font_family or "arial_bold").strip().lower()
+    stem = base[:-5] if base.endswith("_bold") else base
+    if stem == "system_default":
+        return "system_default"
+    if font_bold and stem in ("arial", "dejavu"):
+        return f"{stem}_bold"
+    if not font_bold and stem in ("arial", "dejavu"):
+        return stem
+    return stem if stem in FONT_PRESETS else "arial_bold"
+
 # Ultimate fallback paths when preset candidates are exhausted.
 _FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -289,9 +320,9 @@ _FONT_CANDIDATES = [
 ]
 
 
-def _font_paths_for_preset(font_family: str) -> List[str]:
+def _font_paths_for_preset(font_family: str, font_bold: bool = True) -> List[str]:
     """Ordered font file candidates for a named preset."""
-    preset = (font_family or "arial_bold").strip().lower()
+    preset = _font_preset_key(font_family, font_bold)
     if preset == "system_default":
         return list(_FONT_CANDIDATES)
     paths = list(FONT_PRESETS.get(preset, []))
@@ -307,14 +338,18 @@ def _font_paths_for_preset(font_family: str) -> List[str]:
     return ordered
 
 
-def _load_font(size: int, font_family: str = "arial_bold") -> Tuple[Any, Optional[str]]:
+def _load_font(
+    size: int,
+    font_family: str = "arial_bold",
+    font_bold: bool = True,
+) -> Tuple[Any, Optional[str]]:
     """
     Load a TrueType font at *size* points from a named preset.
 
     Returns (font, resolved_path). resolved_path is None only when falling back
     to PIL's built-in bitmap font.
     """
-    for path in _font_paths_for_preset(font_family):
+    for path in _font_paths_for_preset(font_family, font_bold):
         if os.path.isfile(path):
             try:
                 font = ImageFont.truetype(path, size)
@@ -451,7 +486,7 @@ def _render_cue_image(
     bottom_margin = round(video_h * bottom_margin_ratio)
     max_box_w = max(1, round(video_w * max_width_ratio))
 
-    font, _font_path = _load_font(font_size, style.font_family)
+    font, _font_path = _load_font(font_size, style.font_family, style.font_bold)
 
     # Word-wrap to fit inside the box (minus padding).
     inner_max_w = max(1, max_box_w - 2 * pad_x)
@@ -588,6 +623,7 @@ def _burn_classic(
         style.reference_height,
         background_visible=style.background_visible,
         font_family=style.font_family,
+        font_bold=style.font_bold,
     )
 
     try:
@@ -652,7 +688,7 @@ def _burn_rounded(
     scaled_pad = max(6, round(style.padding_x * scale))
     bottom_px = round(video_h * style.bottom_margin_ratio)
 
-    probe_font, probe_path = _load_font(scaled_font, style.font_family)
+    probe_font, probe_path = _load_font(scaled_font, style.font_family, style.font_bold)
     try:
         ascent, descent = probe_font.getmetrics()
     except (AttributeError, OSError, TypeError, ValueError) as exc:
@@ -666,6 +702,7 @@ def _burn_rounded(
         f"ffmpeg_base_frame={base_w}x{base_h} | "
         f"orientation_normalize={orientation_mode} | "
         f"font_family={style.font_family} | "
+        f"font_bold={style.font_bold} | "
         f"font_path={probe_path} | "
         f"font_size={scaled_font}px | "
         f"font_metrics=({ascent},{descent}) | "

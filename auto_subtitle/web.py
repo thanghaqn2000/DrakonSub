@@ -35,6 +35,7 @@ from .subtitle_renderer import (
     FONT_FAMILY_CHOICES,
     default_layout_dict,
     resolve_background_visible,
+    resolve_font_bold,
 )
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
 from .utils import hex_color_to_ass
@@ -269,6 +270,7 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("background_opacity must be between 0 and 1")
 
     layout["background_visible"] = resolve_background_visible(layout)
+    layout["font_bold"] = resolve_font_bold(layout, layout["font_family"])
 
     layout["border_radius"] = _as_int(layout["border_radius"], "border_radius")
     layout["padding_x"] = _as_int(layout["padding_x"], "padding_x")

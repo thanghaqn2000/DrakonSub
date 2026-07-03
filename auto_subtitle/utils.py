@@ -396,6 +396,7 @@ def write_ass_for_burn(
     reference_height: int = 1920,
     background_visible: bool = True,
     font_family: str = "arial_bold",
+    font_bold: bool = True,
 ) -> None:
     """Write an ASS subtitle file matched to the video resolution."""
     width, height = get_video_size(video_path)
@@ -417,6 +418,8 @@ def write_ass_for_burn(
         outline = 0
         back_colour = "&H00000000"
 
+    ass_bold = 1 if font_bold else 0
+
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -425,7 +428,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{ass_font},{scaled_font_size},{text_colour},&H000000FF,{box_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,{margin_h},{margin_h},{margin_v},1
+Style: Default,{ass_font},{scaled_font_size},{text_colour},&H000000FF,{box_colour},{back_colour},{ass_bold},0,0,0,100,100,0,0,{border_style},{outline},0,2,{margin_h},{margin_h},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -453,6 +456,7 @@ def prepare_burn_subtitles(
     reference_height: int = 1920,
     background_visible: bool = True,
     font_family: str = "arial_bold",
+    font_bold: bool = True,
 ) -> str:
     """Convert SRT to a temporary ASS file positioned for the target video."""
     with open(srt_path, encoding="utf-8") as f:
@@ -476,6 +480,7 @@ def prepare_burn_subtitles(
         reference_height,
         background_visible=background_visible,
         font_family=font_family,
+        font_bold=font_bold,
     )
     return ass_path
 

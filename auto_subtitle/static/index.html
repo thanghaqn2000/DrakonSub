@@ -212,6 +212,13 @@
       accent-color: var(--purple);
     }
 
+    .toggle-group {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
     .color-row {
       display: flex;
       gap: 0.5rem;
@@ -763,10 +770,14 @@
           </div>
         </div>
       </div>
-      <div class="field-row">
+      <div class="field-row toggle-group">
         <label class="toggle-row" for="layout-bg-visible">
           <input type="checkbox" id="layout-bg-visible" checked />
           <span>Hiển thị background</span>
+        </label>
+        <label class="toggle-row" for="layout-font-bold">
+          <input type="checkbox" id="layout-font-bold" checked />
+          <span>Chữ đậm</span>
         </label>
       </div>
       <p class="field-hint">Xem trước overlay trên video gốc — chỉ là text mẫu, không sửa nội dung sub thật.</p>
@@ -864,6 +875,7 @@
       bgColor: document.getElementById("layout-bg-color"),
       bgColorPicker: document.getElementById("layout-bg-color-picker"),
       bgVisible: document.getElementById("layout-bg-visible"),
+      fontBold: document.getElementById("layout-font-bold"),
       xVal: document.getElementById("layout-x-val"),
       yVal: document.getElementById("layout-y-val"),
       widthVal: document.getElementById("layout-width-val"),
@@ -925,6 +937,13 @@
     layoutControls.fontSize.addEventListener("input", onLayoutControlChange);
     layoutControls.fontFamily.addEventListener("change", onLayoutControlChange);
     layoutControls.bgVisible.addEventListener("change", onLayoutControlChange);
+    layoutControls.fontBold.addEventListener("change", onLayoutControlChange);
+
+    function resolveFontBold(layout) {
+      if (layout.font_bold !== undefined) return layout.font_bold !== false;
+      const family = layout.font_family || "arial_bold";
+      return family === "arial_bold" || family === "dejavu_bold";
+    }
 
     async function loadDefaults() {
       try {
@@ -1371,6 +1390,7 @@
         padding_x: currentLayout?.padding_x ?? 28,
         padding_y: currentLayout?.padding_y ?? 16,
         font_family: layoutControls.fontFamily.value,
+        font_bold: layoutControls.fontBold.checked,
       };
     }
 
@@ -1386,6 +1406,7 @@
       layoutControls.bgColor.value = (layout.background_color ?? "#FFFFFF").toUpperCase();
       layoutControls.bgColorPicker.value = layoutControls.bgColor.value;
       layoutControls.bgVisible.checked = layout.background_visible !== false;
+      layoutControls.fontBold.checked = resolveFontBold(layout);
       layoutControls.xVal.textContent = `${layoutControls.x.value}%`;
       layoutControls.yVal.textContent = `${layoutControls.y.value}%`;
       layoutControls.widthVal.textContent = `${layoutControls.width.value}%`;
@@ -1427,7 +1448,7 @@
       layoutOverlayEl.style.padding = `${padY}px ${padX}px`;
       layoutOverlayEl.style.borderRadius = `${radius}px`;
       layoutOverlayEl.style.fontFamily = FONT_STACKS[preset] || FONT_STACKS.arial_bold;
-      layoutOverlayEl.style.fontWeight = FONT_WEIGHTS[preset] || "700";
+      layoutOverlayEl.style.fontWeight = layout.font_bold !== false ? "700" : "400";
 
       layoutControls.xVal.textContent = `${layoutControls.x.value}%`;
       layoutControls.yVal.textContent = `${layoutControls.y.value}%`;

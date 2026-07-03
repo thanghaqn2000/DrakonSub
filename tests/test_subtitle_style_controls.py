@@ -6,6 +6,8 @@ from auto_subtitle.subtitle_renderer import (
     SubtitleRenderStyle,
     default_layout_dict,
     resolve_background_visible,
+    resolve_font_bold,
+    _font_preset_key,
 )
 from auto_subtitle.web import validate_layout
 
@@ -38,6 +40,17 @@ class SubtitleStyleControlsTests(unittest.TestCase):
     def test_validate_layout_old_job_without_background_visible(self):
         layout = validate_layout({"font_family": "arial_bold"})
         self.assertTrue(layout["background_visible"])
+        self.assertTrue(layout["font_bold"])
+
+    def test_resolve_font_bold_backward_compat(self):
+        self.assertTrue(resolve_font_bold({"font_family": "arial_bold"}))
+        self.assertFalse(resolve_font_bold({"font_family": "arial"}))
+        self.assertFalse(resolve_font_bold({"font_family": "comfortaa", "font_bold": False}))
+
+    def test_font_preset_key_respects_bold_toggle(self):
+        self.assertEqual(_font_preset_key("arial", True), "arial_bold")
+        self.assertEqual(_font_preset_key("arial_bold", False), "arial")
+        self.assertEqual(_font_preset_key("comfortaa", False), "comfortaa")
 
     def test_local_font_files_exist(self):
         for key in ("comfortaa", "montserrat_alternates"):

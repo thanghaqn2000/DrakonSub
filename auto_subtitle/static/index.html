@@ -1591,7 +1591,11 @@
 
     function hideUrlImportActions() {
       urlImportActions.classList.add("hidden");
+    }
+
+    function resetUrlDownloadJob() {
       urlDownloadJobId = null;
+      hideUrlImportActions();
     }
 
     function showUrlImportActions(data) {
@@ -1653,7 +1657,10 @@
 
     processUrlBtn.addEventListener("click", async () => {
       const jobId = urlDownloadJobId;
-      if (!jobId) return;
+      if (!jobId) {
+        showError("Không tìm thấy video đã tải. Vui lòng tải lại video từ link.");
+        return;
+      }
       clearError();
       hideUrlImportActions();
       processUrlBtn.disabled = true;
@@ -1987,7 +1994,7 @@
 
       clearError();
       clearOutputPreview();
-      hideUrlImportActions();
+      resetUrlDownloadJob();
       layoutEditing = false;
       editLayoutBtn.textContent = "Chỉnh layout";
       layoutPanel.classList.add("hidden");

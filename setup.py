@@ -16,6 +16,7 @@ setup(
         'uvicorn[standard]',
         'python-multipart',
         'transformers',
+        'yt-dlp',
     ],
     description="Automatically generate and embed subtitles into your videos",
     entry_points={

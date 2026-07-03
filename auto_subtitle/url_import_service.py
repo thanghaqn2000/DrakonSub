@@ -29,6 +29,9 @@ FACEBOOK_HOSTS = frozenset(
 FACEBOOK_PATH_HINTS = ("/videos/", "/video/", "/reel/", "/reels/", "/watch", "/share/")
 
 
+PROVIDER_MISMATCH_MESSAGE = "Link không khớp với nguồn đã chọn."
+
+
 class UrlImportError(ValueError):
     """User-facing URL import failure."""
 
@@ -100,6 +103,18 @@ def validate_video_url(url: str) -> str:
 
     detect_provider(raw)
     return raw
+
+
+def validate_url_with_selected_provider(url: str, selected_provider: str) -> tuple[str, str]:
+    """Validate URL and ensure it matches the user-selected source (youtube/facebook)."""
+    safe_url = validate_video_url(url)
+    detected = detect_provider(safe_url)
+    selected = (selected_provider or "youtube").strip().lower()
+    if selected not in ("youtube", "facebook"):
+        raise UrlImportError("Nguồn video không hợp lệ.")
+    if detected != selected:
+        raise UrlImportError(PROVIDER_MISMATCH_MESSAGE)
+    return safe_url, detected
 
 
 def _map_download_error(exc: Exception) -> UrlImportError:

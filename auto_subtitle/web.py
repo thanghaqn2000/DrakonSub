@@ -38,7 +38,12 @@ from .subtitle_renderer import (
     resolve_font_bold,
 )
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
-from .url_import_service import UrlImportError, detect_provider, validate_video_url
+from .url_import_service import (
+    UrlImportError,
+    detect_provider,
+    validate_url_with_selected_provider,
+    validate_video_url,
+)
 from .utils import hex_color_to_ass
 
 load_env()
@@ -50,6 +55,8 @@ JOBS_ROOT = Path(tempfile.gettempdir()) / "drakonsub_jobs"
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    DOWNLOADED = "downloaded"
     PROCESSING = "processing"
     DONE = "done"
     ERROR = "error"
@@ -75,6 +82,7 @@ class Job:
     subtitle_font_color: Optional[str] = None
     source_language: str = "en"
     last_render_subtitle_source: Optional[str] = None
+    url_provider: Optional[str] = None
 
 
 jobs: Dict[str, Job] = {}
@@ -292,6 +300,7 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _job_to_dict(job: Job) -> Dict[str, Any]:
+    input_ready = bool(job.input_path and os.path.isfile(job.input_path))
     can_render_again = (
         job.status in (JobStatus.DONE, JobStatus.ERROR)
         and job.layout_saved
@@ -300,6 +309,7 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         and job.input_path
         and os.path.isfile(job.input_path)
     )
+    can_process_subtitles = job.status == JobStatus.DOWNLOADED and input_ready
     return {
         "job_id": job.id,
         "status": job.status.value,
@@ -308,6 +318,10 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         "output_name": job.output_name,
         "error": job.error,
         "layout_saved": job.layout_saved,
+        "input_ready": input_ready,
+        "provider": job.url_provider,
+        "can_process_subtitles": can_process_subtitles,
+        "input_video_url": f"/api/jobs/{job.id}/input-video" if input_ready else None,
         "can_render_again": can_render_again,
         "preview_url": f"/api/jobs/{job.id}/preview"
         if job.status == JobStatus.DONE
@@ -370,7 +384,7 @@ def _run_url_import_job(job_id: str, url: str) -> None:
 
     try:
         with jobs_lock:
-            jobs[job_id].status = JobStatus.PROCESSING
+            jobs[job_id].status = JobStatus.DOWNLOADING
             jobs[job_id].message = "Đang tải video..."
             jobs[job_id].progress = 5
             job_dir = _job_paths(job_id)[0]
@@ -379,10 +393,10 @@ def _run_url_import_job(job_id: str, url: str) -> None:
 
         with jobs_lock:
             jobs[job_id].input_path = result["path"]
-            jobs[job_id].message = "Tải video thành công. Đang tạo phụ đề..."
-            jobs[job_id].progress = 15
-
-        _run_job(job_id)
+            jobs[job_id].url_provider = result.get("provider")
+            jobs[job_id].status = JobStatus.DOWNLOADED
+            jobs[job_id].message = "Đã tải video thành công."
+            jobs[job_id].progress = 100
     except UrlImportError as exc:
         with jobs_lock:
             jobs[job_id].status = JobStatus.ERROR
@@ -615,9 +629,9 @@ async def create_job(
 @app.post("/api/jobs/from-url")
 async def create_job_from_url(body: Dict[str, Any] = Body(...)):
     url = str(body.get("url", "")).strip()
+    selected_provider = str(body.get("selected_provider", "youtube")).strip().lower()
     try:
-        safe_url = validate_video_url(url)
-        provider = detect_provider(safe_url)
+        safe_url, provider = validate_url_with_selected_provider(url, selected_provider)
         fields = _parse_job_creation_fields(
             output_name=str(body.get("output_name", "")),
             topic=str(body.get("topic", DEFAULT_TOPIC)),
@@ -639,7 +653,7 @@ async def create_job_from_url(body: Dict[str, Any] = Body(...)):
 
     job = Job(
         id=job_id,
-        status=JobStatus.PROCESSING,
+        status=JobStatus.DOWNLOADING,
         message="Đang kiểm tra link...",
         progress=0,
         output_name=fields["output_name"],
@@ -651,6 +665,7 @@ async def create_job_from_url(body: Dict[str, Any] = Body(...)):
         subtitle_font_size=fields["subtitle_font_size"],
         subtitle_font_color=fields["subtitle_font_color"],
         source_language=fields["source_language"],
+        url_provider=provider,
     )
 
     with jobs_lock:
@@ -664,7 +679,46 @@ async def create_job_from_url(body: Dict[str, Any] = Body(...)):
         "topic": fields["translation_topic"],
         "source": "url",
         "provider": provider,
+        "status": JobStatus.DOWNLOADING.value,
+        "input_ready": False,
     }
+
+
+@app.post("/api/jobs/{job_id}/process")
+def process_downloaded_job(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        if job.status in (JobStatus.PROCESSING, JobStatus.DOWNLOADING):
+            raise HTTPException(409, "Job is already processing")
+        if job.status != JobStatus.DOWNLOADED:
+            raise HTTPException(400, "Job is not ready for subtitle processing")
+        if not job.input_path or not os.path.isfile(job.input_path):
+            raise HTTPException(400, "Original video not found")
+        job.status = JobStatus.PROCESSING
+        job.message = "Đang tạo phụ đề..."
+        job.progress = 0
+        job.error = None
+
+    threading.Thread(target=_run_job, args=(job_id,), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "status": JobStatus.PROCESSING.value}
+
+
+@app.get("/api/jobs/{job_id}/input-video")
+def download_input_video(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        path = job.input_path
+        name = job.output_name or "video"
+
+    if not path or not os.path.isfile(path):
+        raise HTTPException(404, "Source video not found")
+
+    safe_name = f"{name}-source.mp4"
+    return FileResponse(path, media_type="video/mp4", filename=safe_name)
 
 
 @app.get("/api/jobs/{job_id}")

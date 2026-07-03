@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
@@ -210,6 +211,89 @@ def _resolve_downloaded_path(output_dir: Path, requested: Path) -> Path:
     return candidates[0]
 
 
+def _probe_media_codecs(path: Path) -> tuple[Optional[str], Optional[str]]:
+    import ffmpeg
+
+    probe = ffmpeg.probe(str(path))
+    video_codec: Optional[str] = None
+    audio_codec: Optional[str] = None
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == "video" and not video_codec:
+            video_codec = stream.get("codec_name")
+        elif stream.get("codec_type") == "audio" and not audio_codec:
+            audio_codec = stream.get("codec_name")
+    return video_codec, audio_codec
+
+
+def _needs_quicktime_compatible_mp4(path: Path) -> bool:
+    if path.suffix.lower() != ".mp4":
+        return True
+    try:
+        video_codec, audio_codec = _probe_media_codecs(path)
+    except Exception:
+        return True
+    if video_codec != "h264":
+        return True
+    if audio_codec and audio_codec != "aac":
+        return True
+    return False
+
+
+def _transcode_to_quicktime_compatible_mp4(source: Path, target: Path) -> None:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        str(target),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def _normalize_downloaded_video(output_dir: Path, downloaded: Path) -> Path:
+    final_path = output_dir / "input.mp4"
+    if not _needs_quicktime_compatible_mp4(downloaded):
+        if downloaded == final_path:
+            return downloaded
+        if final_path.exists():
+            final_path.unlink()
+        downloaded.rename(final_path)
+        return final_path
+
+    compat_path = output_dir / "input.compat.mp4"
+    compat_path.unlink(missing_ok=True)
+    try:
+        _transcode_to_quicktime_compatible_mp4(downloaded, compat_path)
+    except subprocess.CalledProcessError as exc:
+        compat_path.unlink(missing_ok=True)
+        raise UrlImportError(
+            "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
+        ) from exc
+
+    if final_path.exists():
+        final_path.unlink()
+    compat_path.rename(final_path)
+    if downloaded != final_path:
+        downloaded.unlink(missing_ok=True)
+    return final_path
+
+
 def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "format": "bv*+ba/b[ext=mp4]/b",
@@ -269,12 +353,7 @@ def download_video_from_url(
         raise _map_download_error(exc, provider) from exc
 
     downloaded = _resolve_downloaded_path(out_dir, target)
-    if downloaded.suffix.lower() != ".mp4":
-        final_path = out_dir / "input.mp4"
-        if final_path.exists():
-            final_path.unlink()
-        downloaded.rename(final_path)
-        downloaded = final_path
+    downloaded = _normalize_downloaded_video(out_dir, downloaded)
 
     size = downloaded.stat().st_size
     if size <= 0:

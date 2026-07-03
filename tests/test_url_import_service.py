@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+import subprocess
+from typing import Optional, Tuple
 from unittest.mock import patch
 
 from auto_subtitle.url_import_service import (
@@ -17,6 +19,34 @@ from auto_subtitle.url_import_service import (
 
 
 class UrlImportServiceTests(unittest.TestCase):
+    def _probe_codecs(self, path: Path) -> Tuple[Optional[str], Optional[str]]:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_name,codec_type",
+                "-of",
+                "json",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        import json
+
+        data = json.loads(result.stdout)
+        video_codec = None
+        audio_codec = None
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "video":
+                video_codec = stream.get("codec_name")
+            elif stream.get("codec_type") == "audio":
+                audio_codec = stream.get("codec_name")
+        return video_codec, audio_codec
+
     def test_valid_youtube_watch(self) -> None:
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         self.assertEqual(validate_video_url(url), url)
@@ -150,6 +180,48 @@ class UrlImportServiceTests(unittest.TestCase):
                 )
             self.assertEqual(str(ctx.exception), FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
             self.assertFalse(list(Path(tmp).glob("input.*")))
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_facebook_download_normalizes_to_quicktime_friendly_mp4(self, mock_ydl) -> None:
+        instance = mock_ydl.return_value.__enter__.return_value
+        instance.extract_info.return_value = {"duration": 10, "title": "fb clip"}
+
+        def _write_vp9_sample(_urls) -> None:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x120:d=1",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=1000:duration=1",
+                    "-c:v",
+                    "libvpx-vp9",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    str(Path(tmp) / "input.mp4"),
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+        instance.download.side_effect = _write_vp9_sample
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = download_video_from_url(
+                "https://www.facebook.com/reel/1400852521880565",
+                tmp,
+            )
+
+            self.assertEqual(Path(result["path"]).suffix.lower(), ".mp4")
+            video_codec, audio_codec = self._probe_codecs(Path(result["path"]))
+            self.assertEqual(video_codec, "h264")
+            self.assertEqual(audio_codec, "aac")
 
     def test_cleanup_partial_downloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

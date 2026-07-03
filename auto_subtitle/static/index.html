@@ -1652,7 +1652,8 @@
     });
 
     processUrlBtn.addEventListener("click", async () => {
-      if (!urlDownloadJobId) return;
+      const jobId = urlDownloadJobId;
+      if (!jobId) return;
       clearError();
       hideUrlImportActions();
       processUrlBtn.disabled = true;
@@ -1662,15 +1663,15 @@
       progressFill.style.width = "0%";
       progressText.textContent = "Đang tạo phụ đề...";
       try {
-        const res = await fetch(`/api/jobs/${urlDownloadJobId}/process`, { method: "POST" });
+        const res = await fetch(`/api/jobs/${jobId}/process`, { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Không thể bắt đầu tạo phụ đề");
-        beginJobPolling(urlDownloadJobId);
+        beginJobPolling(jobId);
       } catch (err) {
         urlImportBtn.disabled = false;
         processUrlBtn.disabled = false;
         downloadInputBtn.disabled = false;
-        showUrlImportActions({ job_id: urlDownloadJobId, input_video_url: true, can_process_subtitles: true });
+        showUrlImportActions({ job_id: jobId, input_video_url: true, can_process_subtitles: true });
         showError(err.message);
       }
     });

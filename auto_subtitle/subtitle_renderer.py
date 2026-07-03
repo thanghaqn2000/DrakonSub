@@ -30,7 +30,10 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
 # ---------------------------------------------------------------------------
 # Optional Pillow import
@@ -66,7 +69,8 @@ class SubtitleRenderStyle:
     padding_y: int = 16                   # vertical inner padding (px at ref)
     text_safe_padding_y: int = 12         # extra top/bottom room for diacritics/descenders (px at ref)
     background_color: str = "#FFFFFF"
-    background_opacity: float = 0.92      # 0-1
+    background_opacity: float = 1.0       # 0-1; default solid (no transparency)
+    background_visible: bool = True         # when False, render text only (no box)
     text_color: str = "#9333EA"           # default purple; override via env
     font_size: int = 55                   # px at reference_height
     bottom_margin_ratio: float = 0.11     # fraction of video height
@@ -121,6 +125,7 @@ def default_layout_dict() -> Dict[str, Any]:
         "text_color": style.text_color,
         "background_color": style.background_color,
         "background_opacity": style.background_opacity,
+        "background_visible": style.background_visible,
         "border_radius": style.border_radius,
         "padding_x": style.padding_x,
         "padding_y": style.padding_y,
@@ -176,7 +181,7 @@ def load_render_style() -> SubtitleRenderStyle:
         padding_y=_i("SUBTITLE_PADDING_Y", 16),
         text_safe_padding_y=_i("SUBTITLE_TEXT_SAFE_PADDING_Y", 12),
         background_color=_s("SUBTITLE_BACKGROUND_COLOR", "#FFFFFF"),
-        background_opacity=_f("SUBTITLE_BACKGROUND_OPACITY", 0.92),
+        background_opacity=_f("SUBTITLE_BACKGROUND_OPACITY", 1.0),
         text_color=_s("SUBTITLE_TEXT_COLOR", _s("SUBTITLE_FONT_COLOR", "#9333EA")),
         font_size=_i("SUBTITLE_FONT_SIZE", 55),
         bottom_margin_ratio=_f("SUBTITLE_BOTTOM_MARGIN_RATIO", 0.11),
@@ -237,9 +242,35 @@ FONT_PRESETS: Dict[str, List[str]] = {
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ],
     "system_default": [],
+    "comfortaa": [
+        str(_FONTS_DIR / "Comfortaa-Regular.ttf"),
+    ],
+    "montserrat_alternates": [
+        str(_FONTS_DIR / "MontserratAlternates-Regular.ttf"),
+    ],
 }
 
 FONT_FAMILY_CHOICES = tuple(FONT_PRESETS.keys())
+
+ASS_FONT_NAMES = {
+    "arial_bold": "Arial",
+    "arial": "Arial",
+    "dejavu_bold": "DejaVu Sans",
+    "dejavu": "DejaVu Sans",
+    "system_default": "Arial",
+    "comfortaa": "Comfortaa",
+    "montserrat_alternates": "Montserrat Alternates",
+}
+
+
+def resolve_background_visible(layout: Optional[Dict[str, Any]] = None) -> bool:
+    """True when subtitle background should be drawn; missing key => ON (backward compat)."""
+    if not layout:
+        return True
+    value = layout.get("background_visible", True)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 # Ultimate fallback paths when preset candidates are exhausted.
 _FONT_CANDIDATES = [
@@ -445,12 +476,13 @@ def _render_cue_image(
     img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Rounded (or flat) background.
-    bg = _hex_to_rgba(style.background_color, background_opacity)
-    if _ROUNDED_RECT_OK:
-        draw.rounded_rectangle([(0, 0), (box_w - 1, box_h - 1)], radius=radius, fill=bg)
-    else:
-        draw.rectangle([(0, 0), (box_w - 1, box_h - 1)], fill=bg)
+    # Rounded (or flat) background — skip entirely when hidden (not alpha=0 box).
+    if style.background_visible:
+        bg = _hex_to_rgba(style.background_color, background_opacity)
+        if _ROUNDED_RECT_OK:
+            draw.rounded_rectangle([(0, 0), (box_w - 1, box_h - 1)], radius=radius, fill=bg)
+        else:
+            draw.rectangle([(0, 0), (box_w - 1, box_h - 1)], fill=bg)
 
     # Draw each text line centered horizontally. Start below the top safe pad
     # so diacritics never touch the rounded background edge.
@@ -554,6 +586,8 @@ def _burn_classic(
         style.background_color,
         box_padding,
         style.reference_height,
+        background_visible=style.background_visible,
+        font_family=style.font_family,
     )
 
     try:

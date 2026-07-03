@@ -34,6 +34,7 @@ from .subtitle_edit_service import (
 from .subtitle_renderer import (
     FONT_FAMILY_CHOICES,
     default_layout_dict,
+    resolve_background_visible,
 )
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
 from .utils import hex_color_to_ass
@@ -41,6 +42,7 @@ from .utils import hex_color_to_ass
 load_env()
 
 STATIC_DIR = Path(__file__).parent / "static"
+FONTS_DIR = Path(__file__).parent / "fonts"
 JOBS_ROOT = Path(tempfile.gettempdir()) / "drakonsub_jobs"
 
 
@@ -265,6 +267,8 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not 0.0 <= layout["background_opacity"] <= 1.0:
         raise ValueError("background_opacity must be between 0 and 1")
+
+    layout["background_visible"] = resolve_background_visible(layout)
 
     layout["border_radius"] = _as_int(layout["border_radius"], "border_radius")
     layout["padding_x"] = _as_int(layout["padding_x"], "padding_x")
@@ -819,6 +823,7 @@ def reset_all_job_subtitles(job_id: str):
     return {"job_id": job_id, "reset_all": True, "has_edits": bool(payload["edits"])}
 
 
+app.mount("/fonts", StaticFiles(directory=str(FONTS_DIR)), name="fonts")
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 

@@ -15,6 +15,20 @@
       --muted: #a1a1aa;
     }
 
+    @font-face {
+      font-family: "Comfortaa";
+      src: url("/fonts/Comfortaa-Regular.ttf") format("truetype");
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    @font-face {
+      font-family: "Montserrat Alternates";
+      src: url("/fonts/MontserratAlternates-Regular.ttf") format("truetype");
+      font-weight: 400;
+      font-style: normal;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -181,6 +195,21 @@
       font-size: 0.75rem;
       color: var(--muted);
       margin-top: 0.35rem;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 0.25rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-row input {
+      width: 1rem;
+      height: 1rem;
+      accent-color: var(--purple);
     }
 
     .color-row {
@@ -712,6 +741,8 @@
             <option value="arial">Arial thường</option>
             <option value="dejavu_bold">DejaVu đậm</option>
             <option value="dejavu">DejaVu thường</option>
+            <option value="comfortaa">Comfortaa</option>
+            <option value="montserrat_alternates">Montserrat Alternates</option>
             <option value="system_default">Mặc định hệ thống</option>
           </select>
         </div>
@@ -731,6 +762,12 @@
             <input type="text" id="layout-bg-color" value="#FFFFFF" />
           </div>
         </div>
+      </div>
+      <div class="field-row">
+        <label class="toggle-row" for="layout-bg-visible">
+          <input type="checkbox" id="layout-bg-visible" checked />
+          <span>Hiển thị background</span>
+        </label>
       </div>
       <p class="field-hint">Xem trước overlay trên video gốc — chỉ là text mẫu, không sửa nội dung sub thật.</p>
     </div>
@@ -769,6 +806,8 @@
       arial: 'Arial, Helvetica, sans-serif',
       dejavu_bold: 'Arial, Helvetica, sans-serif',
       dejavu: 'Arial, Helvetica, sans-serif',
+      comfortaa: '"Comfortaa", sans-serif',
+      montserrat_alternates: '"Montserrat Alternates", sans-serif',
       system_default: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     };
 
@@ -777,6 +816,8 @@
       arial: '400',
       dejavu_bold: '700',
       dejavu: '400',
+      comfortaa: '400',
+      montserrat_alternates: '400',
       system_default: '400',
     };
 
@@ -822,6 +863,7 @@
       textColorPicker: document.getElementById("layout-text-color-picker"),
       bgColor: document.getElementById("layout-bg-color"),
       bgColorPicker: document.getElementById("layout-bg-color-picker"),
+      bgVisible: document.getElementById("layout-bg-visible"),
       xVal: document.getElementById("layout-x-val"),
       yVal: document.getElementById("layout-y-val"),
       widthVal: document.getElementById("layout-width-val"),
@@ -882,6 +924,7 @@
     });
     layoutControls.fontSize.addEventListener("input", onLayoutControlChange);
     layoutControls.fontFamily.addEventListener("change", onLayoutControlChange);
+    layoutControls.bgVisible.addEventListener("change", onLayoutControlChange);
 
     async function loadDefaults() {
       try {
@@ -1322,7 +1365,8 @@
         font_size: Number(layoutControls.fontSize.value),
         text_color: layoutControls.textColor.value.trim().toUpperCase(),
         background_color: layoutControls.bgColor.value.trim().toUpperCase(),
-        background_opacity: currentLayout?.background_opacity ?? 0.92,
+        background_opacity: 1.0,
+        background_visible: layoutControls.bgVisible.checked,
         border_radius: currentLayout?.border_radius ?? 18,
         padding_x: currentLayout?.padding_x ?? 28,
         padding_y: currentLayout?.padding_y ?? 16,
@@ -1341,6 +1385,7 @@
       layoutControls.textColorPicker.value = layoutControls.textColor.value;
       layoutControls.bgColor.value = (layout.background_color ?? "#FFFFFF").toUpperCase();
       layoutControls.bgColorPicker.value = layoutControls.bgColor.value;
+      layoutControls.bgVisible.checked = layout.background_visible !== false;
       layoutControls.xVal.textContent = `${layoutControls.x.value}%`;
       layoutControls.yVal.textContent = `${layoutControls.y.value}%`;
       layoutControls.widthVal.textContent = `${layoutControls.width.value}%`;
@@ -1370,10 +1415,14 @@
       layoutOverlayEl.style.width = `${boxW}px`;
       layoutOverlayEl.style.transform = "translate(-50%, -50%)";
       layoutOverlayEl.style.color = layout.text_color;
-      layoutOverlayEl.style.backgroundColor = hexToRgba(
-        layout.background_color,
-        layout.background_opacity ?? 0.92
-      );
+      if (layout.background_visible === false) {
+        layoutOverlayEl.style.backgroundColor = "transparent";
+      } else {
+        layoutOverlayEl.style.backgroundColor = hexToRgba(
+          layout.background_color,
+          layout.background_opacity ?? 1.0
+        );
+      }
       layoutOverlayEl.style.fontSize = `${fontPx}px`;
       layoutOverlayEl.style.padding = `${padY}px ${padX}px`;
       layoutOverlayEl.style.borderRadius = `${radius}px`;

@@ -117,6 +117,20 @@ class UrlImportServiceTests(unittest.TestCase):
             validate_url_with_selected_provider(url, "facebook")
         self.assertEqual(str(ctx.exception), PROVIDER_MISMATCH_MESSAGE)
 
+    def test_valid_facebook_reel_alphanumeric(self) -> None:
+        url = "https://www.facebook.com/reel/1AbcDefGhIj"
+        self.assertEqual(detect_provider(url), "facebook")
+
+    def test_valid_facebook_share_with_query(self) -> None:
+        url = "https://www.facebook.com/share/r/abc123/?mibextid=xxxxx"
+        self.assertEqual(detect_provider(url), "facebook")
+
+    def test_facebook_cannot_parse_data_maps_friendly(self) -> None:
+        from auto_subtitle.url_import_service import _map_download_error
+
+        mapped = _map_download_error(RuntimeError("Cannot parse data"), "facebook")
+        self.assertEqual(str(mapped), FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
+
     @patch("yt_dlp.YoutubeDL")
     def test_facebook_download_failure_maps_friendly_error(self, mock_ydl) -> None:
         instance = mock_ydl.return_value.__enter__.return_value

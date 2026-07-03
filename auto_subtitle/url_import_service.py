@@ -79,9 +79,9 @@ def _is_facebook_video_url(url: str) -> bool:
 
     if re.search(r"/videos/\d+", path):
         return True
-    if re.search(r"/reel[s]?/\d+", path):
+    if re.search(r"/reel[s]?/[^/?#]+", path, re.IGNORECASE):
         return True
-    if re.search(r"/share/[vr]/[^/]+", path):
+    if re.search(r"/share/[vr]/[^/?#]+", path, re.IGNORECASE):
         return True
     if "/video/" in path or path.endswith("/video"):
         return True
@@ -169,7 +169,7 @@ def _map_download_error(exc: Exception, provider: Optional[str] = None) -> UrlIm
         )
     )
     if provider == "facebook":
-        if restricted:
+        if restricted or "cannot parse data" in text:
             return UrlImportError(FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
         if "unsupported url" in text or "no video" in text:
             return UrlImportError(FACEBOOK_UNSUPPORTED_MESSAGE)

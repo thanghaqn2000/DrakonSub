@@ -1606,14 +1606,44 @@
       return checked ? checked.value : "youtube";
     }
 
+    function detectUrlSourceFromLink(url) {
+      const raw = (url || "").trim().toLowerCase();
+      if (!raw) return null;
+      try {
+        const host = new URL(raw).hostname.replace(/^www\./, "");
+        if (host === "fb.watch" || host.endsWith(".fb.watch") || host.includes("facebook.com")) {
+          return "facebook";
+        }
+        if (host.includes("youtube.com") || host === "youtu.be" || host.endsWith(".youtu.be")) {
+          return "youtube";
+        }
+      } catch (_) {
+        if (raw.includes("facebook.com") || raw.includes("fb.watch")) return "facebook";
+        if (raw.includes("youtube.com") || raw.includes("youtu.be")) return "youtube";
+      }
+      return null;
+    }
+
     function setUrlSourceActive(value) {
       urlSource = value;
       urlSrcYoutubeBtn.classList.toggle("active", value === "youtube");
       urlSrcFacebookBtn.classList.toggle("active", value === "facebook");
+      const input = urlSourceGroup.querySelector(`input[name="url_source"][value="${value}"]`);
+      if (input) input.checked = true;
+    }
+
+    function syncUrlSourceFromInput() {
+      const detected = detectUrlSourceFromLink(videoUrlInput.value);
+      if (detected) setUrlSourceActive(detected);
     }
 
     urlSourceGroup.addEventListener("change", () => {
       setUrlSourceActive(getSelectedUrlSource());
+    });
+
+    videoUrlInput.addEventListener("input", syncUrlSourceFromInput);
+    videoUrlInput.addEventListener("paste", () => {
+      setTimeout(syncUrlSourceFromInput, 0);
     });
 
     downloadInputBtn.addEventListener("click", () => {
@@ -1951,6 +1981,7 @@
 
     async function startUrlImportJob(url) {
       const name = outputName.value.trim() || "url-video-vietsub";
+      syncUrlSourceFromInput();
       const selectedProvider = getSelectedUrlSource();
 
       clearError();

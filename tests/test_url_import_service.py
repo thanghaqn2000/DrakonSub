@@ -131,6 +131,12 @@ class UrlImportServiceTests(unittest.TestCase):
         mapped = _map_download_error(RuntimeError("Cannot parse data"), "facebook")
         self.assertEqual(str(mapped), FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
 
+    def test_user_reported_facebook_reel(self) -> None:
+        url = "https://www.facebook.com/reel/1400852521880565"
+        safe, provider = validate_url_with_selected_provider(url, "facebook")
+        self.assertEqual(safe, url)
+        self.assertEqual(provider, "facebook")
+
     @patch("yt_dlp.YoutubeDL")
     def test_facebook_download_failure_maps_friendly_error(self, mock_ydl) -> None:
         instance = mock_ydl.return_value.__enter__.return_value

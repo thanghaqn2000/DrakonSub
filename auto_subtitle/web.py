@@ -38,6 +38,12 @@ from .subtitle_renderer import (
     resolve_font_bold,
 )
 from .translation_topics import DEFAULT_TOPIC, list_topics, normalize_topic
+from .url_import_service import (
+    UrlImportError,
+    detect_provider,
+    validate_url_with_selected_provider,
+    validate_video_url,
+)
 from .utils import hex_color_to_ass
 
 load_env()
@@ -45,10 +51,14 @@ load_env()
 STATIC_DIR = Path(__file__).parent / "static"
 FONTS_DIR = Path(__file__).parent / "fonts"
 JOBS_ROOT = Path(tempfile.gettempdir()) / "drakonsub_jobs"
+JOB_META_FILENAME = "job.json"
+JOB_RELOAD_MESSAGE = "Không tìm thấy video đã tải. Vui lòng tải lại video từ link."
 
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    DOWNLOADED = "downloaded"
     PROCESSING = "processing"
     DONE = "done"
     ERROR = "error"
@@ -74,6 +84,7 @@ class Job:
     subtitle_font_color: Optional[str] = None
     source_language: str = "en"
     last_render_subtitle_source: Optional[str] = None
+    url_provider: Optional[str] = None
 
 
 jobs: Dict[str, Job] = {}
@@ -193,6 +204,123 @@ def _job_paths(job_id: str) -> tuple[Path, Path, Path, Path]:
     return job_dir, job_dir / "source.srt", job_dir / "vi_final.srt", job_dir / "layout.json"
 
 
+def _job_meta_path(job_id: str) -> Path:
+    return _job_paths(job_id)[0] / JOB_META_FILENAME
+
+
+def _job_to_meta_dict(job: Job) -> Dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "source": "url",
+        "provider": job.url_provider,
+        "status": job.status.value,
+        "input_filename": "input.mp4",
+        "output_name": job.output_name,
+        "source_language": job.source_language,
+        "topic": job.translation_topic,
+        "translation_engine": job.translation_engine,
+        "subtitle_font_size": job.subtitle_font_size,
+        "subtitle_font_color": job.subtitle_font_color,
+    }
+
+
+def _write_job_meta(job: Job) -> None:
+    job_dir = _job_paths(job.id)[0]
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with open(_job_meta_path(job.id), "w", encoding="utf-8") as fp:
+        json.dump(_job_to_meta_dict(job), fp, ensure_ascii=False, indent=2)
+
+
+def _read_job_meta(job_id: str) -> Optional[Dict[str, Any]]:
+    meta_path = _job_meta_path(job_id)
+    if not meta_path.is_file():
+        return None
+    try:
+        with open(meta_path, encoding="utf-8") as fp:
+            return json.load(fp)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _job_from_meta(job_id: str, meta: Dict[str, Any]) -> Job:
+    job_dir, source_srt_path, srt_path, layout_path = _job_paths(job_id)
+    input_name = str(meta.get("input_filename") or "input.mp4")
+    input_path = job_dir / input_name
+    status_raw = str(meta.get("status") or JobStatus.DOWNLOADED.value)
+    try:
+        status = JobStatus(status_raw)
+    except ValueError:
+        status = JobStatus.DOWNLOADED
+    if status not in (JobStatus.DOWNLOADED, JobStatus.ERROR):
+        status = JobStatus.DOWNLOADED
+    return Job(
+        id=job_id,
+        status=status,
+        message="Đã tải video thành công."
+        if status == JobStatus.DOWNLOADED
+        else "Waiting...",
+        progress=100 if status == JobStatus.DOWNLOADED else 0,
+        output_name=str(meta.get("output_name") or "url-video-vietsub"),
+        input_path=str(input_path) if input_path.is_file() else None,
+        source_srt_path=str(source_srt_path),
+        srt_path=str(srt_path),
+        layout_path=str(layout_path),
+        translation_topic=str(meta.get("topic") or DEFAULT_TOPIC),
+        translation_engine=str(meta.get("translation_engine") or get_translation_engine()),
+        subtitle_font_size=meta.get("subtitle_font_size"),
+        subtitle_font_color=meta.get("subtitle_font_color"),
+        source_language=str(meta.get("source_language") or "en"),
+        url_provider=meta.get("provider"),
+    )
+
+
+def _rehydrate_url_job(job_id: str) -> Optional[Job]:
+    try:
+        job_id = _validate_job_id(job_id)
+    except HTTPException:
+        return None
+
+    job_dir = JOBS_ROOT / job_id
+    input_path = job_dir / "input.mp4"
+    if not input_path.is_file():
+        return None
+
+    meta = _read_job_meta(job_id)
+    if meta:
+        job = _job_from_meta(job_id, meta)
+    else:
+        _, source_srt_path, srt_path, layout_path = _job_paths(job_id)
+        job = Job(
+            id=job_id,
+            status=JobStatus.DOWNLOADED,
+            message="Đã tải video thành công.",
+            progress=100,
+            output_name="url-video-vietsub",
+            input_path=str(input_path),
+            source_srt_path=str(source_srt_path),
+            srt_path=str(srt_path),
+            layout_path=str(layout_path),
+            translation_topic=DEFAULT_TOPIC,
+            translation_engine=get_translation_engine(),
+            source_language="en",
+        )
+
+    if not job.input_path or not os.path.isfile(job.input_path):
+        return None
+
+    with jobs_lock:
+        jobs[job_id] = job
+    return job
+
+
+def _get_job_or_rehydrate(job_id: str) -> Optional[Job]:
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if job:
+        return job
+    return _rehydrate_url_job(job_id)
+
+
 def _edited_vi_path(job_id: str) -> Path:
     return _job_paths(job_id)[0] / "edited_vi.srt"
 
@@ -291,6 +419,7 @@ def validate_layout(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _job_to_dict(job: Job) -> Dict[str, Any]:
+    input_ready = bool(job.input_path and os.path.isfile(job.input_path))
     can_render_again = (
         job.status in (JobStatus.DONE, JobStatus.ERROR)
         and job.layout_saved
@@ -299,6 +428,7 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         and job.input_path
         and os.path.isfile(job.input_path)
     )
+    can_process_subtitles = job.status == JobStatus.DOWNLOADED and input_ready
     return {
         "job_id": job.id,
         "status": job.status.value,
@@ -307,6 +437,10 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         "output_name": job.output_name,
         "error": job.error,
         "layout_saved": job.layout_saved,
+        "input_ready": input_ready,
+        "provider": job.url_provider,
+        "can_process_subtitles": can_process_subtitles,
+        "input_video_url": f"/api/jobs/{job.id}/input-video" if input_ready else None,
         "can_render_again": can_render_again,
         "preview_url": f"/api/jobs/{job.id}/preview"
         if job.status == JobStatus.DONE
@@ -322,6 +456,90 @@ def _job_to_dict(job: Job) -> Dict[str, Any]:
         else None,
         "subtitle_source": job.last_render_subtitle_source,
     }
+
+
+def _parse_job_creation_fields(
+    *,
+    output_name: str,
+    topic: str,
+    source_language: str,
+    translation_engine: str,
+    font_size: Optional[str] = None,
+    font_color: Optional[str] = None,
+    fallback_name: str = "video-vietsub",
+) -> Dict[str, Any]:
+    safe_topic = normalize_topic(topic)
+    if source_language not in ("en", "vi"):
+        raise ValueError("source_language must be 'en' or 'vi'")
+    engine = (translation_engine or "").strip().lower()
+    if engine not in SUPPORTED_TRANSLATION_ENGINES:
+        raise ValueError(
+            "translation_engine must be one of: " + ", ".join(SUPPORTED_TRANSLATION_ENGINES)
+        )
+    defaults = SubtitleConfig.from_env()
+    parsed_font_size = (
+        parse_font_size(font_size, defaults.subtitle_font_size)
+        if font_size and str(font_size).strip()
+        else None
+    )
+    parsed_font_color = (
+        parse_font_color(font_color, defaults.subtitle_font_color)
+        if font_color and str(font_color).strip()
+        else None
+    )
+    final_name = prepare_output_name(output_name, fallback_name)
+    return {
+        "output_name": final_name,
+        "translation_topic": safe_topic,
+        "translation_engine": engine,
+        "subtitle_font_size": parsed_font_size,
+        "subtitle_font_color": parsed_font_color,
+        "source_language": source_language,
+    }
+
+
+def _run_url_import_job(job_id: str, url: str) -> None:
+    from .url_import_service import download_video_from_url
+
+    try:
+        with jobs_lock:
+            jobs[job_id].status = JobStatus.DOWNLOADING
+            jobs[job_id].message = "Đang tải video..."
+            jobs[job_id].progress = 5
+            job_dir = _job_paths(job_id)[0]
+
+        result = download_video_from_url(url, job_dir)
+
+        with jobs_lock:
+            jobs[job_id].input_path = result["path"]
+            jobs[job_id].url_provider = result.get("provider")
+            jobs[job_id].status = JobStatus.DOWNLOADED
+            jobs[job_id].message = "Đã tải video thành công."
+            jobs[job_id].progress = 100
+            _write_job_meta(jobs[job_id])
+    except UrlImportError as exc:
+        from .url_import_service import cleanup_partial_downloads
+
+        cleanup_partial_downloads(_job_paths(job_id)[0])
+        with jobs_lock:
+            jobs[job_id].status = JobStatus.ERROR
+            jobs[job_id].error = str(exc)
+            jobs[job_id].message = str(exc)
+            jobs[job_id].input_path = None
+            jobs[job_id].progress = 0
+    except Exception:  # noqa: BLE001 - worker boundary must report unexpected failures to the job.
+        from .url_import_service import cleanup_partial_downloads
+
+        traceback.print_exc()
+        cleanup_partial_downloads(_job_paths(job_id)[0])
+        with jobs_lock:
+            jobs[job_id].status = JobStatus.ERROR
+            jobs[job_id].error = (
+                "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
+            )
+            jobs[job_id].message = jobs[job_id].error
+            jobs[job_id].input_path = None
+            jobs[job_id].progress = 0
 
 
 def _run_job(job_id: str) -> None:
@@ -492,31 +710,20 @@ async def create_job(
         raise HTTPException(400, "Unsupported format. Use MP4, MOV, MKV, or WEBM.")
 
     try:
-        safe_topic = normalize_topic(topic)
-        if source_language not in ("en", "vi"):
-            raise ValueError("source_language must be 'en' or 'vi'")
-        translation_engine = (translation_engine or "").strip().lower()
-        if translation_engine not in SUPPORTED_TRANSLATION_ENGINES:
-            raise ValueError(
-                "translation_engine must be one of: "
-                + ", ".join(SUPPORTED_TRANSLATION_ENGINES)
-            )
-        defaults = SubtitleConfig.from_env()
-        parsed_font_size = (
-            parse_font_size(font_size, defaults.subtitle_font_size)
-            if font_size and font_size.strip()
-            else None
-        )
-        parsed_font_color = (
-            parse_font_color(font_color, defaults.subtitle_font_color)
-            if font_color and font_color.strip()
-            else None
+        fields = _parse_job_creation_fields(
+            output_name=output_name,
+            topic=topic,
+            source_language=source_language,
+            translation_engine=translation_engine,
+            font_size=font_size,
+            font_color=font_color,
+            fallback_name=f"{Path(video.filename).stem}-vietsub",
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    fallback_name = f"{Path(video.filename).stem}-vietsub"
-    final_name = prepare_output_name(output_name, fallback_name)
+    final_name = fields["output_name"]
+    safe_topic = fields["translation_topic"]
 
     job_id = str(uuid.uuid4())
     job_dir = JOBS_ROOT / job_id
@@ -535,10 +742,10 @@ async def create_job(
         srt_path=str(srt_path),
         layout_path=str(layout_path),
         translation_topic=safe_topic,
-        translation_engine=translation_engine,
-        subtitle_font_size=parsed_font_size,
-        subtitle_font_color=parsed_font_color,
-        source_language=source_language,
+        translation_engine=fields["translation_engine"],
+        subtitle_font_size=fields["subtitle_font_size"],
+        subtitle_font_color=fields["subtitle_font_color"],
+        source_language=fields["source_language"],
     )
 
     with jobs_lock:
@@ -549,12 +756,122 @@ async def create_job(
     return {"job_id": job_id, "output_name": final_name, "topic": safe_topic}
 
 
-@app.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
+@app.post("/api/jobs/from-url")
+async def create_job_from_url(body: Dict[str, Any] = Body(...)):
+    url = str(body.get("url", "")).strip()
+    selected_provider = str(body.get("selected_provider", "youtube")).strip().lower()
+    try:
+        safe_url, provider = validate_url_with_selected_provider(url, selected_provider)
+        fields = _parse_job_creation_fields(
+            output_name=str(body.get("output_name", "")),
+            topic=str(body.get("topic", DEFAULT_TOPIC)),
+            source_language=str(body.get("source_language", "en")),
+            translation_engine=str(body.get("translation_engine", get_translation_engine())),
+            font_size=body.get("font_size"),
+            font_color=body.get("font_color"),
+            fallback_name="url-video-vietsub",
+        )
+    except UrlImportError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    job_id = str(uuid.uuid4())
+    job_dir = JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _, source_srt_path, srt_path, layout_path = _job_paths(job_id)
+
+    job = Job(
+        id=job_id,
+        status=JobStatus.DOWNLOADING,
+        message="Đang kiểm tra link...",
+        progress=0,
+        output_name=fields["output_name"],
+        source_srt_path=str(source_srt_path),
+        srt_path=str(srt_path),
+        layout_path=str(layout_path),
+        translation_topic=fields["translation_topic"],
+        translation_engine=fields["translation_engine"],
+        subtitle_font_size=fields["subtitle_font_size"],
+        subtitle_font_color=fields["subtitle_font_color"],
+        source_language=fields["source_language"],
+        url_provider=provider,
+    )
+
+    with jobs_lock:
+        jobs[job_id] = job
+
+    _write_job_meta(job)
+
+    threading.Thread(target=_run_url_import_job, args=(job_id, safe_url), daemon=True).start()
+
+    return {
+        "job_id": job_id,
+        "output_name": fields["output_name"],
+        "topic": fields["translation_topic"],
+        "source": "url",
+        "provider": provider,
+        "status": JobStatus.DOWNLOADING.value,
+        "input_ready": False,
+    }
+
+
+@app.post("/api/jobs/{job_id}/process")
+def process_downloaded_job(job_id: str):
+    job_id = _validate_job_id(job_id)
+    job = _get_job_or_rehydrate(job_id)
+    if not job:
+        raise HTTPException(404, JOB_RELOAD_MESSAGE)
+
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
-            raise HTTPException(404, "Job not found")
+            raise HTTPException(404, JOB_RELOAD_MESSAGE)
+        if job.status in (JobStatus.PROCESSING, JobStatus.DOWNLOADING):
+            raise HTTPException(409, "Job is already processing")
+        if job.status != JobStatus.DOWNLOADED:
+            raise HTTPException(400, "Job is not ready for subtitle processing")
+        if not job.input_path or not os.path.isfile(job.input_path):
+            raise HTTPException(404, JOB_RELOAD_MESSAGE)
+        job.status = JobStatus.PROCESSING
+        job.message = "Đang tạo phụ đề..."
+        job.progress = 0
+        job.error = None
+
+    threading.Thread(target=_run_job, args=(job_id,), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "status": JobStatus.PROCESSING.value}
+
+
+@app.get("/api/jobs/{job_id}/input-video")
+def download_input_video(job_id: str):
+    job_id = _validate_job_id(job_id)
+    job = _get_job_or_rehydrate(job_id)
+    if not job:
+        raise HTTPException(404, JOB_RELOAD_MESSAGE)
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, JOB_RELOAD_MESSAGE)
+        path = job.input_path
+        name = job.output_name or "video"
+
+    if not path or not os.path.isfile(path):
+        raise HTTPException(404, "Source video not found")
+
+    safe_name = f"{name}-source.mp4"
+    return FileResponse(path, media_type="video/mp4", filename=safe_name)
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    job_id = _validate_job_id(job_id)
+    job = _get_job_or_rehydrate(job_id)
+    if not job:
+        raise HTTPException(404, JOB_RELOAD_MESSAGE)
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, JOB_RELOAD_MESSAGE)
         return _job_to_dict(job)
 
 

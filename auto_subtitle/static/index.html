@@ -101,6 +101,63 @@
 
     .upload-zone p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; }
 
+    .url-import {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .url-import h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .url-import-row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .url-import-row input[type="url"] {
+      flex: 1 1 220px;
+      min-width: 0;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .url-import-note {
+      margin-top: 0.6rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .url-import-actions {
+      margin-top: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .url-import-actions.hidden {
+      display: none;
+    }
+
+    .url-import-success {
+      font-size: 0.9rem;
+      color: #86efac;
+    }
+
+    .url-source-field {
+      margin-top: 0.75rem;
+      margin-bottom: 0.25rem;
+    }
+
     #file-input { display: none; }
 
     .field {
@@ -644,8 +701,39 @@
         <input type="file" id="file-input" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,.mp4,.mov,.mkv,.webm" />
       </div>
 
+      <div class="url-import">
+        <h3>Nhập link video</h3>
+        <div class="field url-source-field">
+          <label>Nguồn video</label>
+          <div class="radio-group" id="url-source-group">
+            <label class="radio-btn active" id="url-src-youtube-btn">
+              <input type="radio" name="url_source" value="youtube" checked />
+              YouTube
+            </label>
+            <label class="radio-btn" id="url-src-facebook-btn">
+              <input type="radio" name="url_source" value="facebook" />
+              Facebook
+            </label>
+          </div>
+        </div>
+        <div class="url-import-row">
+          <input type="url" id="video-url-input" placeholder="https://www.youtube.com/watch?v=... hoặc Facebook" />
+          <button class="btn-secondary" type="button" id="url-import-btn">Tải video</button>
+        </div>
+        <p class="url-import-note">
+          Chỉ dùng với video công khai hoặc video bạn có quyền sử dụng.
+          Không hỗ trợ video riêng tư, video cần đăng nhập hoặc nội dung bị hạn chế.
+        </p>
+        <div class="url-import-actions hidden" id="url-import-actions">
+          <p class="url-import-success" id="url-import-success">Đã tải video thành công.</p>
+          <div class="actions-secondary">
+            <button class="btn-secondary" type="button" id="download-input-btn">Tải video gốc</button>
+            <button class="btn-primary" type="button" id="process-url-btn">Tạo phụ đề từ video này</button>
+          </div>
+        </div>
+      </div>
+
       <div class="field">
-        <label>Ngôn ngữ video</label>
         <div class="radio-group">
           <label class="radio-btn active" id="lang-en-btn">
             <input type="radio" name="source_language" value="en" checked />
@@ -834,6 +922,14 @@
 
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
+    const videoUrlInput = document.getElementById("video-url-input");
+    const urlImportBtn = document.getElementById("url-import-btn");
+    const urlSourceGroup = document.getElementById("url-source-group");
+    const urlSrcYoutubeBtn = document.getElementById("url-src-youtube-btn");
+    const urlSrcFacebookBtn = document.getElementById("url-src-facebook-btn");
+    const urlImportActions = document.getElementById("url-import-actions");
+    const downloadInputBtn = document.getElementById("download-input-btn");
+    const processUrlBtn = document.getElementById("process-url-btn");
     const topicSelect = document.getElementById("topic");
     const topicField = document.getElementById("topic-field");
     const translationEngineField = document.getElementById("translation-engine-field");
@@ -881,6 +977,8 @@
       widthVal: document.getElementById("layout-width-val"),
     };
 
+    let urlSource = "youtube";
+    let urlDownloadJobId = null;
     let selectedFile = null;
     let inputObjectUrl = null;
     let pollTimer = null;
@@ -1321,6 +1419,34 @@
       if (layoutEditing && currentLayout) updateLayoutOverlay();
     }
 
+    function setInputPreviewFromJob(jobId, inputVideoUrl) {
+      if (!jobId) return;
+      if (inputObjectUrl) {
+        URL.revokeObjectURL(inputObjectUrl);
+        inputObjectUrl = null;
+      }
+      const base = inputVideoUrl || `/api/jobs/${jobId}/input-video`;
+      const bust = `${base}?t=${Date.now()}`;
+      renderVideoPreview(inputPreview, bust, {
+        withOverlay: true,
+        label: "input",
+        onVideoRefresh: () => {
+          if (layoutEditing && currentLayout) updateLayoutOverlay();
+        },
+      });
+      layoutOverlayEl = document.getElementById("layout-overlay");
+      if (layoutEditing && currentLayout) updateLayoutOverlay();
+    }
+
+    function clearInputPreview() {
+      if (inputObjectUrl) {
+        URL.revokeObjectURL(inputObjectUrl);
+        inputObjectUrl = null;
+      }
+      inputPreview.innerHTML = `<p class="placeholder">Chưa có video</p>`;
+      layoutOverlayEl = null;
+    }
+
     function resetLayoutUi() {
       currentJobId = null;
       layoutEditing = false;
@@ -1491,6 +1617,104 @@
         .catch(() => {});
     }
 
+    function hideUrlImportActions() {
+      urlImportActions.classList.add("hidden");
+    }
+
+    function resetUrlDownloadJob() {
+      urlDownloadJobId = null;
+      hideUrlImportActions();
+    }
+
+    function showUrlImportActions(data) {
+      urlDownloadJobId = data.job_id;
+      urlImportActions.classList.remove("hidden");
+      downloadInputBtn.disabled = !data.input_video_url;
+      processUrlBtn.disabled = !data.can_process_subtitles;
+      if (data.input_video_url || data.job_id) {
+        setInputPreviewFromJob(data.job_id, data.input_video_url);
+      }
+    }
+
+    function getSelectedUrlSource() {
+      const checked = urlSourceGroup.querySelector('input[name="url_source"]:checked');
+      return checked ? checked.value : "youtube";
+    }
+
+    function detectUrlSourceFromLink(url) {
+      const raw = (url || "").trim().toLowerCase();
+      if (!raw) return null;
+      try {
+        const host = new URL(raw).hostname.replace(/^www\./, "");
+        if (host === "fb.watch" || host.endsWith(".fb.watch") || host.includes("facebook.com")) {
+          return "facebook";
+        }
+        if (host.includes("youtube.com") || host === "youtu.be" || host.endsWith(".youtu.be")) {
+          return "youtube";
+        }
+      } catch (_) {
+        if (raw.includes("facebook.com") || raw.includes("fb.watch")) return "facebook";
+        if (raw.includes("youtube.com") || raw.includes("youtu.be")) return "youtube";
+      }
+      return null;
+    }
+
+    function setUrlSourceActive(value) {
+      urlSource = value;
+      urlSrcYoutubeBtn.classList.toggle("active", value === "youtube");
+      urlSrcFacebookBtn.classList.toggle("active", value === "facebook");
+      const input = urlSourceGroup.querySelector(`input[name="url_source"][value="${value}"]`);
+      if (input) input.checked = true;
+    }
+
+    function syncUrlSourceFromInput() {
+      const detected = detectUrlSourceFromLink(videoUrlInput.value);
+      if (detected) setUrlSourceActive(detected);
+    }
+
+    urlSourceGroup.addEventListener("change", () => {
+      setUrlSourceActive(getSelectedUrlSource());
+    });
+
+    videoUrlInput.addEventListener("input", syncUrlSourceFromInput);
+    videoUrlInput.addEventListener("paste", () => {
+      setTimeout(syncUrlSourceFromInput, 0);
+    });
+
+    downloadInputBtn.addEventListener("click", () => {
+      if (!urlDownloadJobId) return;
+      window.location.href = `/api/jobs/${urlDownloadJobId}/input-video`;
+    });
+
+    processUrlBtn.addEventListener("click", async () => {
+      const jobId = urlDownloadJobId;
+      if (!jobId) {
+        showError("Không tìm thấy video đã tải. Vui lòng tải lại video từ link.");
+        return;
+      }
+      clearError();
+      hideUrlImportActions();
+      setInputPreviewFromJob(jobId, `/api/jobs/${jobId}/input-video`);
+      processUrlBtn.disabled = true;
+      downloadInputBtn.disabled = true;
+      urlImportBtn.disabled = true;
+      progressWrap.classList.add("visible");
+      progressFill.style.width = "0%";
+      progressText.textContent = "Đang tạo phụ đề...";
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/process`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Không thể bắt đầu tạo phụ đề");
+        beginJobPolling(jobId);
+      } catch (err) {
+        urlImportBtn.disabled = false;
+        processUrlBtn.disabled = false;
+        downloadInputBtn.disabled = false;
+        showUrlImportActions({ job_id: jobId, input_video_url: true, can_process_subtitles: true });
+        showError(err.message);
+      }
+    });
+
     async function pollJob(jobId) {
       const res = await fetch(`/api/jobs/${jobId}`);
       if (!res.ok) throw new Error("Không lấy được trạng thái job");
@@ -1499,9 +1723,20 @@
       progressFill.style.width = `${data.progress}%`;
       progressText.textContent = `${data.message} (${data.progress}%)`;
 
+      if (data.status === "downloaded") {
+        clearInterval(pollTimer);
+        generateBtn.disabled = !selectedFile;
+        urlImportBtn.disabled = false;
+        progressWrap.classList.remove("visible");
+        showUrlImportActions(data);
+        return;
+      }
+
       if (data.status === "done") {
         clearInterval(pollTimer);
-        generateBtn.disabled = false;
+        hideUrlImportActions();
+        generateBtn.disabled = !selectedFile;
+        urlImportBtn.disabled = false;
         editLayoutBtn.disabled = layoutEditing;
         renderAgainBtn.disabled = layoutDirty || !data.can_render_again;
         onJobComplete(data);
@@ -1513,7 +1748,9 @@
 
       if (data.status === "error") {
         clearInterval(pollTimer);
-        generateBtn.disabled = false;
+        hideUrlImportActions();
+        generateBtn.disabled = !selectedFile;
+        urlImportBtn.disabled = false;
         editLayoutBtn.disabled = !currentJobId;
         renderAgainBtn.disabled = layoutDirty || !data.can_render_again;
         showError(data.error || "Xử lý thất bại");
@@ -1737,7 +1974,19 @@
 
     generateBtn.addEventListener("click", async () => {
       if (!selectedFile) return;
+      await startUploadJob();
+    });
 
+    urlImportBtn.addEventListener("click", async () => {
+      const url = videoUrlInput.value.trim();
+      if (!url) {
+        showError("Vui lòng nhập link video.");
+        return;
+      }
+      await startUrlImportJob(url);
+    });
+
+    async function startUploadJob() {
       const name = outputName.value.trim();
 
       clearError();
@@ -1746,6 +1995,7 @@
       editLayoutBtn.textContent = "Chỉnh layout";
       layoutPanel.classList.add("hidden");
       generateBtn.disabled = true;
+      urlImportBtn.disabled = true;
       progressWrap.classList.add("visible");
       progressFill.style.width = "0%";
       progressText.textContent = "Đang tải lên...";
@@ -1761,15 +2011,70 @@
         const res = await fetch("/api/jobs", { method: "POST", body: form });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Tải lên thất bại");
-
-        currentJobId = data.job_id;
-        pollTimer = setInterval(() => pollJob(data.job_id), 1500);
-        pollJob(data.job_id);
+        beginJobPolling(data.job_id);
       } catch (err) {
-        generateBtn.disabled = false;
+        generateBtn.disabled = !selectedFile;
+        urlImportBtn.disabled = false;
         showError(err.message);
       }
-    });
+    }
+
+    async function startUrlImportJob(url) {
+      const name = outputName.value.trim() || "url-video-vietsub";
+      syncUrlSourceFromInput();
+      const selectedProvider = getSelectedUrlSource();
+
+      clearError();
+      clearOutputPreview();
+      clearInputPreview();
+      resetUrlDownloadJob();
+      layoutEditing = false;
+      editLayoutBtn.textContent = "Chỉnh layout";
+      layoutPanel.classList.add("hidden");
+      generateBtn.disabled = true;
+      urlImportBtn.disabled = true;
+      processUrlBtn.disabled = true;
+      downloadInputBtn.disabled = true;
+      progressWrap.classList.add("visible");
+      progressFill.style.width = "0%";
+      progressText.textContent = "Đang kiểm tra link...";
+
+      try {
+        const res = await fetch("/api/jobs/from-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url,
+            selected_provider: selectedProvider,
+            output_name: name,
+            topic: topicSelect.value,
+            source_language: sourceLang,
+            translation_engine: translationEngineSelect.value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const detail = data.detail;
+          const message = Array.isArray(detail)
+            ? detail.map((item) => item.msg || item).join(", ")
+            : (detail || "Không thể tải video từ link này.");
+          throw new Error(message);
+        }
+        outputName.value = data.output_name || name;
+        beginJobPolling(data.job_id);
+      } catch (err) {
+        generateBtn.disabled = !selectedFile;
+        urlImportBtn.disabled = false;
+        showError(err.message);
+      }
+    }
+
+    function beginJobPolling(jobId) {
+      currentJobId = jobId;
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => pollJob(jobId), 1500);
+      pollJob(jobId);
+    }
   </script>
 </body>
 </html>

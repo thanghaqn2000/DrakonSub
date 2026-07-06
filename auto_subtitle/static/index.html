@@ -1419,6 +1419,34 @@
       if (layoutEditing && currentLayout) updateLayoutOverlay();
     }
 
+    function setInputPreviewFromJob(jobId, inputVideoUrl) {
+      if (!jobId) return;
+      if (inputObjectUrl) {
+        URL.revokeObjectURL(inputObjectUrl);
+        inputObjectUrl = null;
+      }
+      const base = inputVideoUrl || `/api/jobs/${jobId}/input-video`;
+      const bust = `${base}?t=${Date.now()}`;
+      renderVideoPreview(inputPreview, bust, {
+        withOverlay: true,
+        label: "input",
+        onVideoRefresh: () => {
+          if (layoutEditing && currentLayout) updateLayoutOverlay();
+        },
+      });
+      layoutOverlayEl = document.getElementById("layout-overlay");
+      if (layoutEditing && currentLayout) updateLayoutOverlay();
+    }
+
+    function clearInputPreview() {
+      if (inputObjectUrl) {
+        URL.revokeObjectURL(inputObjectUrl);
+        inputObjectUrl = null;
+      }
+      inputPreview.innerHTML = `<p class="placeholder">Chưa có video</p>`;
+      layoutOverlayEl = null;
+    }
+
     function resetLayoutUi() {
       currentJobId = null;
       layoutEditing = false;
@@ -1603,6 +1631,9 @@
       urlImportActions.classList.remove("hidden");
       downloadInputBtn.disabled = !data.input_video_url;
       processUrlBtn.disabled = !data.can_process_subtitles;
+      if (data.input_video_url || data.job_id) {
+        setInputPreviewFromJob(data.job_id, data.input_video_url);
+      }
     }
 
     function getSelectedUrlSource() {
@@ -1663,6 +1694,7 @@
       }
       clearError();
       hideUrlImportActions();
+      setInputPreviewFromJob(jobId, `/api/jobs/${jobId}/input-video`);
       processUrlBtn.disabled = true;
       downloadInputBtn.disabled = true;
       urlImportBtn.disabled = true;
@@ -1994,6 +2026,7 @@
 
       clearError();
       clearOutputPreview();
+      clearInputPreview();
       resetUrlDownloadJob();
       layoutEditing = false;
       editLayoutBtn.textContent = "Chỉnh layout";

@@ -103,6 +103,14 @@ class UrlImportServiceTests(unittest.TestCase):
             validate_video_url("https://www.facebook.com/photo/?fbid=123")
         self.assertEqual(str(ctx.exception), FACEBOOK_UNSUPPORTED_MESSAGE)
 
+    def test_invalid_youtube_homepage(self) -> None:
+        with self.assertRaises(UrlImportError):
+            validate_video_url("https://www.youtube.com/")
+
+    def test_invalid_youtube_channel(self) -> None:
+        with self.assertRaises(UrlImportError):
+            validate_video_url("https://www.youtube.com/@somechannel")
+
     def test_invalid_unsupported_domain(self) -> None:
         with self.assertRaises(UrlImportError):
             validate_video_url("https://example.com/video.mp4")
@@ -173,12 +181,15 @@ class UrlImportServiceTests(unittest.TestCase):
         instance.extract_info.side_effect = RuntimeError("login required")
 
         with tempfile.TemporaryDirectory() as tmp:
+            partial = Path(tmp) / "input.mp4.part"
+            partial.write_bytes(b"x")
             with self.assertRaises(UrlImportError) as ctx:
                 download_video_from_url(
                     "https://www.facebook.com/user/videos/1234567890/",
                     tmp,
                 )
             self.assertEqual(str(ctx.exception), FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
+            self.assertFalse(partial.exists())
             self.assertFalse(list(Path(tmp).glob("input.*")))
 
     @patch("yt_dlp.YoutubeDL")

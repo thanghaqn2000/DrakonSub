@@ -2013,7 +2013,7 @@
         if (!res.ok) throw new Error(data.detail || "Tải lên thất bại");
         beginJobPolling(data.job_id);
       } catch (err) {
-        generateBtn.disabled = !!selectedFile;
+        generateBtn.disabled = !selectedFile;
         urlImportBtn.disabled = false;
         showError(err.message);
       }
@@ -2063,7 +2063,7 @@
         outputName.value = data.output_name || name;
         beginJobPolling(data.job_id);
       } catch (err) {
-        generateBtn.disabled = !!selectedFile;
+        generateBtn.disabled = !selectedFile;
         urlImportBtn.disabled = false;
         showError(err.message);
       }

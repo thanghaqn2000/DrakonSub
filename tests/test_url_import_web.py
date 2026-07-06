@@ -1,5 +1,7 @@
 import json
+import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +29,7 @@ class UrlImportWebFlowTests(unittest.TestCase):
     def tearDown(self) -> None:
         jobs.clear()
         self.jobs_root_patcher.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     @patch.object(web, "_run_job")
     @patch.object(web, "_run_url_import_job")
@@ -44,6 +47,9 @@ class UrlImportWebFlowTests(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["status"], "downloading")
         self.assertEqual(data["provider"], "youtube")
+        deadline = time.time() + 1
+        while mock_import_job.call_count == 0 and time.time() < deadline:
+            time.sleep(0.01)
         mock_run_job.assert_not_called()
         mock_import_job.assert_called_once()
 

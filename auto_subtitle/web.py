@@ -527,7 +527,7 @@ def _run_url_import_job(job_id: str, url: str) -> None:
             jobs[job_id].message = str(exc)
             jobs[job_id].input_path = None
             jobs[job_id].progress = 0
-    except Exception:
+    except Exception:  # noqa: BLE001 - worker boundary must report unexpected failures to the job.
         from .url_import_service import cleanup_partial_downloads
 
         traceback.print_exc()

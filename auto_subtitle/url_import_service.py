@@ -64,6 +64,21 @@ def _is_fb_watch_host(host: str) -> bool:
     return host in {"fb.watch", "www.fb.watch"} or host.endswith(".fb.watch")
 
 
+def _is_youtube_video_url(url: str) -> bool:
+    """Return True when URL looks like a direct YouTube video link."""
+    parsed = urlparse(url.strip())
+    host = _normalize_host(url)
+    path = (parsed.path or "").lower()
+    if host in {"youtu.be", "www.youtu.be"} and path.strip("/"):
+        return True
+    if path == "/watch":
+        query = parse_qs(parsed.query or "")
+        return bool(query.get("v", [""])[0])
+    if path.startswith(("/shorts/", "/embed/")):
+        return True
+    return False
+
+
 def _is_facebook_video_url(url: str) -> bool:
     """Return True when URL looks like a supported public Facebook video/reel/watch link."""
     parsed = urlparse(url.strip())
@@ -116,7 +131,9 @@ def detect_provider(url: str) -> str:
     """Return 'youtube' or 'facebook' for a supported public video URL."""
     host = _normalize_host(url)
     if host in YOUTUBE_HOSTS:
-        return "youtube"
+        if _is_youtube_video_url(url):
+            return "youtube"
+        raise UrlImportError(GENERIC_UNSUPPORTED_MESSAGE)
     if host in FACEBOOK_HOSTS or _is_fb_watch_host(host):
         if _is_facebook_video_url(url):
             return "facebook"
@@ -280,7 +297,7 @@ def _normalize_downloaded_video(output_dir: Path, downloaded: Path) -> Path:
     compat_path.unlink(missing_ok=True)
     try:
         _transcode_to_quicktime_compatible_mp4(downloaded, compat_path)
-    except subprocess.CalledProcessError as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         compat_path.unlink(missing_ok=True)
         raise UrlImportError(
             "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."

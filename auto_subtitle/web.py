@@ -50,7 +50,16 @@ load_env()
 
 STATIC_DIR = Path(__file__).parent / "static"
 FONTS_DIR = Path(__file__).parent / "fonts"
-JOBS_ROOT = Path(tempfile.gettempdir()) / "drakonsub_jobs"
+
+
+def _resolve_jobs_root() -> Path:
+    raw = os.getenv("DRAKONSUB_JOBS_ROOT", "").strip()
+    if raw:
+        return Path(raw)
+    return Path(tempfile.gettempdir()) / "drakonsub_jobs"
+
+
+JOBS_ROOT = _resolve_jobs_root()
 JOB_META_FILENAME = "job.json"
 JOB_RELOAD_MESSAGE = "Không tìm thấy video đã tải. Vui lòng tải lại video từ link."
 
@@ -676,6 +685,30 @@ def _run_reburn(job_id: str) -> None:
 @app.get("/api/topics")
 def get_topics():
     return {"topics": list_topics(), "default": DEFAULT_TOPIC}
+
+
+@app.get("/api/health")
+def health_check():
+    """Lightweight readiness probe for production smoke tests (no secrets)."""
+    config = SubtitleConfig.from_env()
+    jobs_writable = False
+    try:
+        JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+        probe = JOBS_ROOT / ".health_probe"
+        probe.write_text("ok", encoding="utf-8")
+        jobs_writable = probe.is_file()
+        probe.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return {
+        "status": "ok",
+        "jobs_root": str(JOBS_ROOT),
+        "jobs_root_writable": jobs_writable,
+        "translation_engine": config.translation_engine,
+        "whisper_model": config.model,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+    }
 
 
 @app.get("/api/defaults")

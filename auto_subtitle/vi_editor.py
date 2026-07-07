@@ -596,6 +596,10 @@ def edit_vi_srt_entries(
 
     try:
         provider = resolve_vi_editor_provider(translation_engine)
+        if provider == "google":
+            print("  [VI Editor] skipped (Google translation engine)")
+            return _align_vi_entries_to_source(source_entries, vi_entries)
+
         model = resolve_vi_editor_model(provider)
         batch_size = get_vi_editor_batch_size()
         context_window = get_vi_editor_context_window()

@@ -16,6 +16,7 @@ from .utils import (
     parse_srt,
     write_srt_entries,
     translate_srt_entries,
+    assert_vietnamese_translation_applied,
     build_word_aligned_segments,
     str2bool,
 )
@@ -80,6 +81,7 @@ class SubtitleConfig:
             bottom_margin_ratio = _env_float("SUBTITLE_MARGIN_BOTTOM", 32.0) / 100.0
 
         return cls(
+            model=_env_str("WHISPER_MODEL", "small"),
             translation_engine=get_translation_engine(),
             subtitle_margin_bottom=_env_float("SUBTITLE_MARGIN_BOTTOM", 32.0),
             subtitle_font_size=_env_int("SUBTITLE_FONT_SIZE", 55),
@@ -461,6 +463,7 @@ def translate_srt_file(
         translation_context=translation_context,
         strict_cue_count=strict_cue_count,
     )
+    assert_vietnamese_translation_applied(entries, translated, target_lang=config.translate_to)
 
     with open(output_srt_path, "w", encoding="utf-8") as f:
         write_srt_entries(translated, file=f)

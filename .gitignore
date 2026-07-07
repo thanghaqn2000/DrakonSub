@@ -31,6 +31,10 @@ debug/
 artifacts/multi_sample_benchmark/
 artifacts/translation_quality_review/
 
+# Local deploy data (jobs, model cache) — never commit
+data/
+data/youtube-cookies.txt
+
 # SA bridge runtime (config.json is committed)
 .sa_bridge/state.json
 .sa_bridge/last_sa_response.md

@@ -1049,12 +1049,13 @@
         if (!res.ok) return;
         const data = await res.json();
         defaultLayout = data.default_layout;
+        const engineLabels = data.translation_engine_labels || {};
         if (Array.isArray(data.translation_engines)) {
           translationEngineSelect.innerHTML = "";
           data.translation_engines.forEach((engine) => {
             const opt = document.createElement("option");
             opt.value = engine;
-            opt.textContent = engine === "gemini" ? "Gemini" : "OpenAI";
+            opt.textContent = engineLabels[engine] || engine;
             translationEngineSelect.appendChild(opt);
           });
         }

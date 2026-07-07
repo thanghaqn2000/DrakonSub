@@ -62,6 +62,11 @@ def _resolve_jobs_root() -> Path:
 JOBS_ROOT = _resolve_jobs_root()
 JOB_META_FILENAME = "job.json"
 JOB_RELOAD_MESSAGE = "Không tìm thấy video đã tải. Vui lòng tải lại video từ link."
+TRANSLATION_ENGINE_LABELS = {
+    "openai": "OpenAI",
+    "gemini": "Gemini",
+    "google": "Google Translate",
+}
 
 
 class JobStatus(str, Enum):
@@ -720,6 +725,10 @@ def get_defaults():
         "openai_model": get_openai_model(),
         "translation_engine": config.translation_engine,
         "translation_engines": list(SUPPORTED_TRANSLATION_ENGINES),
+        "translation_engine_labels": {
+            engine: TRANSLATION_ENGINE_LABELS.get(engine, engine.title())
+            for engine in SUPPORTED_TRANSLATION_ENGINES
+        },
         "default_layout": default_layout_dict(),
         "font_presets": list(FONT_FAMILY_CHOICES),
     }

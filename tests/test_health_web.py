@@ -29,6 +29,19 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn("openai_configured", data)
         self.assertNotIn("OPENAI_API_KEY", res.text)
 
+    def test_defaults_returns_distinct_engine_labels(self) -> None:
+        res = self.client.get("/api/defaults")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(
+            data["translation_engine_labels"],
+            {
+                "openai": "OpenAI",
+                "gemini": "Gemini",
+                "google": "Google Translate",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

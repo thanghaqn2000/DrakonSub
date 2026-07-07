@@ -10,6 +10,8 @@ from auto_subtitle.url_import_service import (
     FACEBOOK_UNSUPPORTED_MESSAGE,
     PROVIDER_MISMATCH_MESSAGE,
     UrlImportError,
+    YOUTUBE_BOT_BLOCK_MESSAGE,
+    _build_ydl_opts,
     cleanup_partial_downloads,
     detect_provider,
     download_video_from_url,
@@ -233,6 +235,87 @@ class UrlImportServiceTests(unittest.TestCase):
             video_codec, audio_codec = self._probe_codecs(Path(result["path"]))
             self.assertEqual(video_codec, "h264")
             self.assertEqual(audio_codec, "aac")
+
+    @patch.dict("os.environ", {}, clear=False)
+    @patch("auto_subtitle.url_import_service._browser_cookie_source", return_value=("chrome",))
+    def test_build_youtube_opts_falls_back_to_browser_cookies_when_no_file(
+        self,
+        mock_browser_cookie_source,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = _build_ydl_opts(Path(tmp), "youtube", use_browser_cookies=True)
+        self.assertEqual(opts["cookiesfrombrowser"], ("chrome",))
+        mock_browser_cookie_source.assert_called_once()
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_build_youtube_opts_keeps_local_default_clients_without_server_cookie_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = _build_ydl_opts(Path(tmp), "youtube")
+        self.assertEqual(
+            opts["extractor_args"],
+            {"youtube": {"player_client": ["android", "web"]}},
+        )
+        self.assertNotIn("remote_components", opts)
+
+    @patch("yt_dlp.YoutubeDL")
+    @patch("auto_subtitle.url_import_service._browser_cookie_source", return_value=("chrome",))
+    @patch(
+        "auto_subtitle.url_import_service._normalize_downloaded_video",
+        side_effect=lambda _out_dir, downloaded: downloaded,
+    )
+    def test_youtube_retries_with_browser_cookies_after_reload_error(
+        self,
+        _mock_normalize_downloaded_video,
+        _mock_browser_cookie_source,
+        mock_ydl,
+    ) -> None:
+        first_cm = unittest.mock.MagicMock()
+        second_cm = unittest.mock.MagicMock()
+        first = first_cm.__enter__.return_value
+        second = second_cm.__enter__.return_value
+        mock_ydl.side_effect = [first_cm, second_cm]
+
+        first.extract_info.side_effect = RuntimeError("The page needs to be reloaded.")
+        second.extract_info.return_value = {"duration": 10, "title": "zoo"}
+
+        def _write_mp4(_urls) -> None:
+            path = Path(tmpdir) / "input.mp4"
+            path.write_bytes(b"mp4")
+
+        second.download.side_effect = _write_mp4
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = download_video_from_url(
+                "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+                tmpdir,
+            )
+
+        self.assertEqual(result["provider"], "youtube")
+        self.assertEqual(mock_ydl.call_count, 2)
+        first_opts = mock_ydl.call_args_list[0].args[0]
+        second_opts = mock_ydl.call_args_list[1].args[0]
+        self.assertNotIn("cookiesfrombrowser", first_opts)
+        self.assertEqual(second_opts["cookiesfrombrowser"], ("chrome",))
+
+    @patch("yt_dlp.YoutubeDL")
+    @patch("auto_subtitle.url_import_service._browser_cookie_source", return_value=None)
+    def test_youtube_reload_error_maps_to_friendly_bot_message_without_cookie_fallback(
+        self,
+        _mock_browser_cookie_source,
+        mock_ydl,
+    ) -> None:
+        instance = mock_ydl.return_value.__enter__.return_value
+        instance.extract_info.side_effect = RuntimeError("The page needs to be reloaded.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(UrlImportError) as ctx:
+                download_video_from_url(
+                    "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+                    tmp,
+                )
+        self.assertEqual(str(ctx.exception), YOUTUBE_BOT_BLOCK_MESSAGE)
 
     def test_cleanup_partial_downloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

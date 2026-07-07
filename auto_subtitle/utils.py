@@ -548,8 +548,47 @@ def translate_srt_entries(
             translation_context=translation_context,
             strict_cue_count=strict_cue_count,
         )
+    if engine == "google":
+        from .google_translate import translate_srt_entries_google
+
+        return translate_srt_entries_google(
+            entries,
+            target_lang=target_lang,
+            source_lang=source_lang,
+            topic=topic,
+            translation_context=translation_context,
+            strict_cue_count=strict_cue_count,
+        )
 
     raise ValueError(f"Unsupported translation engine: {engine}")
+
+
+def assert_vietnamese_translation_applied(
+    source_entries: List[dict],
+    translated_entries: List[dict],
+    *,
+    target_lang: str = "vi",
+) -> None:
+    """Fail fast when translation silently kept English source text."""
+    if (target_lang or "").strip().lower() not in ("vi", "vietnamese"):
+        return
+
+    unchanged = 0
+    total = 0
+    for src, dst in zip(source_entries, translated_entries):
+        source_text = (src.get("text") or "").strip()
+        translated_text = (dst.get("text") or "").strip()
+        if not source_text:
+            continue
+        total += 1
+        if translated_text == source_text or translated_text.lower() == source_text.lower():
+            unchanged += 1
+
+    if total >= 2 and unchanged / total >= 0.85:
+        raise RuntimeError(
+            "Dịch thất bại: phụ đề vẫn là tiếng Anh. "
+            "Kiểm tra TRANSLATION_ENGINE và khả năng truy cập API từ server."
+        )
 
 
 def export_translation_ab_srt(

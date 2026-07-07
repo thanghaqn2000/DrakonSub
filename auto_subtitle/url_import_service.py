@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -39,6 +40,9 @@ FACEBOOK_UNSUPPORTED_MESSAGE = (
 )
 FACEBOOK_DOWNLOAD_FAIL_MESSAGE = (
     "Không thể tải video Facebook này. Video có thể riêng tư, bị giới hạn hoặc cần đăng nhập."
+)
+YOUTUBE_BOT_BLOCK_MESSAGE = (
+    "YouTube chặn tải từ server này. Vui lòng tải file video trực tiếp hoặc liên hệ admin cấu hình cookies."
 )
 GENERIC_UNSUPPORTED_MESSAGE = (
     "Link không được hỗ trợ. Vui lòng dùng link YouTube hoặc Facebook công khai."
@@ -184,8 +188,12 @@ def _map_download_error(exc: Exception, provider: Optional[str] = None) -> UrlIm
             "not available",
             "confirm your age",
             "age-restricted",
+            "not a bot",
+            "confirm you're not a bot",
         )
     )
+    if provider == "youtube" and ("not a bot" in text or "sign in to confirm" in text):
+        return UrlImportError(YOUTUBE_BOT_BLOCK_MESSAGE)
     if provider == "facebook":
         if restricted or "cannot parse data" in text:
             return UrlImportError(FACEBOOK_DOWNLOAD_FAIL_MESSAGE)
@@ -311,6 +319,24 @@ def _normalize_downloaded_video(output_dir: Path, downloaded: Path) -> Path:
     return final_path
 
 
+def _youtube_cookie_file() -> Optional[str]:
+    raw = (os.getenv("YT_DLP_COOKIES_FILE") or "").strip()
+    if not raw:
+        return None
+    src = Path(raw)
+    if not src.is_file():
+        return None
+    # yt-dlp rewrites cookie files on exit; RO mounts break downloads.
+    dest = Path("/tmp/drakonsub-youtube-cookies.txt")
+    try:
+        import shutil
+
+        shutil.copy2(src, dest)
+        return str(dest)
+    except OSError:
+        return str(src) if os.access(src, os.W_OK) else None
+
+
 def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "format": "bv*+ba/b[ext=mp4]/b",
@@ -324,8 +350,17 @@ def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
         "nocheckcertificate": False,
         "http_headers": {"User-Agent": _DEFAULT_USER_AGENT},
     }
+    cookie_file = _youtube_cookie_file()
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
     if provider == "youtube":
-        opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+        opts["remote_components"] = ["ejs:github"]
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["tv", "web"],
+                "player_skip": ["webpage"],
+            }
+        }
     return opts
 
 

@@ -22,7 +22,7 @@ OPENAI_CHAT_MODELS = (
 DEFAULT_OPENAI_MODEL = "gpt-5.5-2026-04-23"
 DEFAULT_TRANSLATION_BATCH_SIZE = 30
 DEFAULT_TRANSLATION_ENGINE = "openai"
-SUPPORTED_TRANSLATION_ENGINES = ("openai", "gemini")
+SUPPORTED_TRANSLATION_ENGINES = ("openai", "gemini", "google")
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 DEFAULT_VI_EDITOR_BATCH_SIZE = 30
@@ -150,6 +150,8 @@ def get_vi_editor_provider() -> str:
 
 
 def resolve_vi_editor_provider(translation_engine: str) -> str:
+    if translation_engine == "google":
+        return "google"
     if VI_EDITOR_PROVIDER == "auto":
         return translation_engine
     return VI_EDITOR_PROVIDER

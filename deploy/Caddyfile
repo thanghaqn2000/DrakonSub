@@ -1,0 +1,3 @@
+{$DRAKONSUB_DOMAIN:localhost} {
+	reverse_proxy drakonsub:8000
+}

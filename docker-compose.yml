@@ -1,0 +1,50 @@
+services:
+  drakonsub:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DRAKONSUB_HOST: "0.0.0.0"
+      DRAKONSUB_PORT: "8000"
+      DRAKONSUB_JOBS_ROOT: "/app/data/jobs"
+      XDG_CACHE_HOME: "/app/data/whisper-cache"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data/jobs:/app/data/jobs
+      - ./data/whisper-cache:/app/data/whisper-cache
+      - ./data/youtube-cookies.txt:/app/data/youtube-cookies.txt
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DRAKONSUB_DOMAIN: ${DRAKONSUB_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - drakonsub
+
+volumes:
+  caddy_data:
+  caddy_config:

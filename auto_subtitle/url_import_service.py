@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import platform
 import re
 import subprocess
 from pathlib import Path
@@ -190,9 +191,14 @@ def _map_download_error(exc: Exception, provider: Optional[str] = None) -> UrlIm
             "age-restricted",
             "not a bot",
             "confirm you're not a bot",
+            "the page needs to be reloaded",
         )
     )
-    if provider == "youtube" and ("not a bot" in text or "sign in to confirm" in text):
+    if provider == "youtube" and (
+        "not a bot" in text
+        or "sign in to confirm" in text
+        or "the page needs to be reloaded" in text
+    ):
         return UrlImportError(YOUTUBE_BOT_BLOCK_MESSAGE)
     if provider == "facebook":
         if restricted or "cannot parse data" in text:
@@ -337,7 +343,45 @@ def _youtube_cookie_file() -> Optional[str]:
         return str(src) if os.access(src, os.W_OK) else None
 
 
-def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
+def _browser_cookie_source() -> Optional[tuple[str]]:
+    system = platform.system().lower()
+    home = Path.home()
+    candidates = []
+    if system == "darwin":
+        candidates = [
+            (home / "Library/Application Support/Google/Chrome", ("chrome",)),
+            (home / "Library/Application Support/Chromium", ("chromium",)),
+            (home / "Library/Application Support/Microsoft Edge", ("edge",)),
+            (home / "Library/Safari", ("safari",)),
+        ]
+    elif system == "windows":
+        local = Path(os.getenv("LOCALAPPDATA", ""))
+        appdata = Path(os.getenv("APPDATA", ""))
+        candidates = [
+            (local / "Google/Chrome/User Data", ("chrome",)),
+            (local / "Chromium/User Data", ("chromium",)),
+            (local / "Microsoft/Edge/User Data", ("edge",)),
+            (appdata / "Mozilla/Firefox/Profiles", ("firefox",)),
+        ]
+    else:
+        candidates = [
+            (home / ".config/google-chrome", ("chrome",)),
+            (home / ".config/chromium", ("chromium",)),
+            (home / ".mozilla/firefox", ("firefox",)),
+        ]
+
+    for path, source in candidates:
+        if path.exists():
+            return source
+    return None
+
+
+def _build_ydl_opts(
+    out_dir: Path,
+    provider: str,
+    *,
+    use_browser_cookies: bool = False,
+) -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "format": "bv*+ba/b[ext=mp4]/b",
         "merge_output_format": "mp4",
@@ -351,17 +395,40 @@ def _build_ydl_opts(out_dir: Path, provider: str) -> Dict[str, Any]:
         "http_headers": {"User-Agent": _DEFAULT_USER_AGENT},
     }
     cookie_file = _youtube_cookie_file()
+    has_server_cookie_file = bool(cookie_file)
     if cookie_file:
         opts["cookiefile"] = cookie_file
+    elif provider == "youtube" and use_browser_cookies:
+        browser_cookie_source = _browser_cookie_source()
+        if browser_cookie_source:
+            opts["cookiesfrombrowser"] = browser_cookie_source
     if provider == "youtube":
-        opts["remote_components"] = ["ejs:github"]
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["tv", "web"],
-                "player_skip": ["webpage"],
+        if has_server_cookie_file:
+            opts["remote_components"] = ["ejs:github"]
+            opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["tv", "web"],
+                    "player_skip": ["webpage"],
+                }
             }
-        }
+        else:
+            opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
     return opts
+
+
+def _youtube_needs_browser_cookie_retry(exc: Exception, ydl_opts: Dict[str, Any]) -> bool:
+    if "cookiefile" in ydl_opts or "cookiesfrombrowser" in ydl_opts:
+        return False
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "the page needs to be reloaded",
+            "not a bot",
+            "sign in to confirm",
+            "confirm you're not a bot",
+        )
+    )
 
 
 def download_video_from_url(
@@ -401,8 +468,37 @@ def download_video_from_url(
         cleanup_partial_downloads(out_dir)
         raise
     except Exception as exc:
-        cleanup_partial_downloads(out_dir)
-        raise _map_download_error(exc, provider) from exc
+        retry_succeeded = False
+        if provider == "youtube" and _youtube_needs_browser_cookie_retry(exc, ydl_opts):
+            cleanup_partial_downloads(out_dir)
+            retry_opts = _build_ydl_opts(
+                out_dir,
+                provider,
+                use_browser_cookies=True,
+            )
+            if "cookiesfrombrowser" in retry_opts:
+                try:
+                    with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                        info = ydl.extract_info(safe_url, download=False) or {}
+                        duration = info.get("duration") or 0
+                        if duration and duration > MAX_DURATION_SECONDS:
+                            raise UrlImportError(
+                                "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
+                            )
+                        ydl.download([safe_url])
+                    retry_succeeded = True
+                except UrlImportError:
+                    cleanup_partial_downloads(out_dir)
+                    raise
+                except Exception as retry_exc:
+                    cleanup_partial_downloads(out_dir)
+                    raise _map_download_error(retry_exc, provider) from retry_exc
+            else:
+                cleanup_partial_downloads(out_dir)
+                raise _map_download_error(exc, provider) from exc
+        if not retry_succeeded:
+            cleanup_partial_downloads(out_dir)
+            raise _map_download_error(exc, provider) from exc
 
     downloaded = _resolve_downloaded_path(out_dir, target)
     downloaded = _normalize_downloaded_video(out_dir, downloaded)

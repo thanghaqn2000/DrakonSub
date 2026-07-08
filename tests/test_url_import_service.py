@@ -331,9 +331,9 @@ class UrlImportServiceTests(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "VIDEO_DOWNLOAD_API_KEY": "vda_test",
+            "VIDEO_DOWNLOAD_API_KEY_1": "vda_test",
             "TUNELIO_API_KEY": "tnl_test",
-            "CAPTAPI_API_KEY": "capt_test",
+            "CAPTAPI_API_KEY_1": "capt_test",
         },
         clear=False,
     )
@@ -377,9 +377,9 @@ class UrlImportServiceTests(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "VIDEO_DOWNLOAD_API_KEY": "vda_test",
+            "VIDEO_DOWNLOAD_API_KEY_1": "vda_test",
             "TUNELIO_API_KEY": "tnl_test",
-            "CAPTAPI_API_KEY": "capt_test",
+            "CAPTAPI_API_KEY_1": "capt_test",
         },
         clear=False,
     )

@@ -139,12 +139,31 @@ def _request_json(
     return payload
 
 
-def _captapi_key() -> Optional[str]:
-    return (os.getenv("CAPTAPI_API_KEY") or "").strip() or None
+def _captapi_keys() -> List[str]:
+    keys: List[str] = []
+    for index in range(1, 5):
+        key = (os.getenv(f"CAPTAPI_API_KEY_{index}") or "").strip()
+        if key:
+            keys.append(key)
+
+    legacy = (os.getenv("CAPTAPI_API_KEY") or "").strip()
+    if legacy and legacy not in keys:
+        keys.append(legacy)
+    return keys
 
 
-def _video_download_api_key() -> Optional[str]:
-    return (os.getenv("VIDEO_DOWNLOAD_API_KEY") or "").strip() or None
+def _video_download_api_keys() -> List[str]:
+    keys: List[str] = []
+    for index in range(1, 5):
+        key = (os.getenv(f"VIDEO_DOWNLOAD_API_KEY_{index}") or "").strip()
+        if key:
+            keys.append(key)
+
+    # Backward compatibility for older local setups.
+    legacy = (os.getenv("VIDEO_DOWNLOAD_API_KEY") or "").strip()
+    if legacy and legacy not in keys:
+        keys.append(legacy)
+    return keys
 
 
 def _tunelio_key() -> Optional[str]:
@@ -158,88 +177,152 @@ def resolve_video_download_api(
     worker_prepare: bool = True,
     poll_timeout_seconds: int = 90,
 ) -> ExternalResolveResult:
-    api_key = _video_download_api_key()
-    if not api_key:
-        raise ExternalDownloadError("VIDEO_DOWNLOAD_API_KEY is not set")
+    api_keys = _video_download_api_keys()
+    if not api_keys:
+        raise ExternalDownloadError("VIDEO_DOWNLOAD_API_KEY_1..4 are not set")
 
-    query = urllib.parse.urlencode(
-        {
-            "format": format_code,
-            "url": youtube_url,
-            "apikey": api_key,
-            "worker_prepare": "1" if worker_prepare else "0",
-        }
-    )
-    payload = _request_json(f"https://p.savenow.to/api/v2/download?{query}", timeout=90)
-    if not payload.get("success"):
-        raise ExternalDownloadError(f"Video Download API error: {payload}")
+    last_credit_error: Optional[ExternalCreditsExhaustedError] = None
+    last_error: Optional[ExternalDownloadError] = None
 
-    started = time.time()
-    while not payload.get("url"):
-        progress_url = _assert_safe_url(str(payload.get("progress_url") or "").strip())
-        if not progress_url:
-            raise ExternalDownloadError(
-                f"Video Download API response missing url/progress_url: {payload}"
+    for api_key in api_keys:
+        query = urllib.parse.urlencode(
+            {
+                "format": format_code,
+                "url": youtube_url,
+                "apikey": api_key,
+                "worker_prepare": "1" if worker_prepare else "0",
+            }
+        )
+        try:
+            payload = _request_json(
+                f"https://p.savenow.to/api/v2/download?{query}",
+                timeout=90,
             )
-        if time.time() - started > poll_timeout_seconds:
-            raise ExternalDownloadError("Video Download API progress polling timed out")
-        time.sleep(2)
-        payload = _request_json(progress_url, timeout=60)
-        if _is_credits_exhausted(0, json.dumps(payload), payload):
-            raise ExternalCreditsExhaustedError(
-                f"Video Download API credits exhausted: {payload}"
+        except ExternalCreditsExhaustedError as exc:
+            last_credit_error = exc
+            continue
+        except ExternalDownloadError as exc:
+            last_error = exc
+            break
+
+        if not payload.get("success"):
+            last_error = ExternalDownloadError(f"Video Download API error: {payload}")
+            break
+
+        started = time.time()
+        while not payload.get("url"):
+            progress_url = _assert_safe_url(str(payload.get("progress_url") or "").strip())
+            if not progress_url:
+                last_error = ExternalDownloadError(
+                    f"Video Download API response missing url/progress_url: {payload}"
+                )
+                payload = {}
+                break
+            if time.time() - started > poll_timeout_seconds:
+                last_error = ExternalDownloadError(
+                    "Video Download API progress polling timed out"
+                )
+                payload = {}
+                break
+            time.sleep(2)
+            try:
+                payload = _request_json(progress_url, timeout=60)
+            except ExternalCreditsExhaustedError as exc:
+                last_credit_error = exc
+                payload = {}
+                break
+
+            if _is_credits_exhausted(0, json.dumps(payload), payload):
+                last_credit_error = ExternalCreditsExhaustedError(
+                    f"Video Download API credits exhausted: {payload}"
+                )
+                payload = {}
+                break
+
+        if not payload:
+            continue
+
+        download_url = _assert_safe_url(str(payload.get("url") or "").strip())
+        if not download_url:
+            last_error = ExternalDownloadError(
+                f"Video Download API missing download url: {payload}"
             )
+            break
 
-    download_url = _assert_safe_url(str(payload.get("url") or "").strip())
-    if not download_url:
-        raise ExternalDownloadError(f"Video Download API missing download url: {payload}")
+        return ExternalResolveResult(
+            provider="video-download-api",
+            youtube_url=youtube_url,
+            download_url=download_url,
+            title=(payload.get("title") or payload.get("filename") or None),
+            duration_seconds=None,
+            file_size_bytes=None,
+            cached=None,
+            credits_used=None,
+            raw=payload,
+        )
 
-    return ExternalResolveResult(
-        provider="video-download-api",
-        youtube_url=youtube_url,
-        download_url=download_url,
-        title=(payload.get("title") or payload.get("filename") or None),
-        duration_seconds=None,
-        file_size_bytes=None,
-        cached=None,
-        credits_used=None,
-        raw=payload,
-    )
+    if last_credit_error is not None:
+        raise last_credit_error
+    if last_error is not None:
+        raise last_error
+    raise ExternalDownloadError("Video Download API request failed")
 
 
 def resolve_captapi(youtube_url: str) -> ExternalResolveResult:
-    api_key = _captapi_key()
-    if not api_key:
-        raise ExternalDownloadError("CAPTAPI_API_KEY is not set")
+    api_keys = _captapi_keys()
+    if not api_keys:
+        raise ExternalDownloadError("CAPTAPI_API_KEY_1..4 are not set")
 
-    query = urllib.parse.urlencode({"url": youtube_url})
-    payload = _request_json(
-        f"https://api.captapi.com/v1/youtube/video-download?{query}",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    if not payload.get("success"):
-        raise ExternalDownloadError(f"Captapi error: {payload}")
+    last_credit_error: Optional[ExternalCreditsExhaustedError] = None
+    last_error: Optional[ExternalDownloadError] = None
 
-    data = payload.get("data") or {}
-    download_url = data.get("downloadUrl") or data.get("url")
-    if not download_url:
-        raise ExternalDownloadError(f"Captapi response missing downloadUrl: {payload}")
+    for api_key in api_keys:
+        query = urllib.parse.urlencode({"url": youtube_url})
+        try:
+            payload = _request_json(
+                f"https://api.captapi.com/v1/youtube/video-download?{query}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except ExternalCreditsExhaustedError as exc:
+            last_credit_error = exc
+            continue
+        except ExternalDownloadError as exc:
+            last_error = exc
+            break
 
-    duration_ms = _safe_int(data.get("approxDurationMs") or data.get("durationMs"))
-    duration_seconds = int(duration_ms / 1000) if duration_ms is not None else None
-    download_url = _assert_safe_url(str(download_url))
+        if not payload.get("success"):
+            last_error = ExternalDownloadError(f"Captapi error: {payload}")
+            break
 
-    return ExternalResolveResult(
-        provider="captapi",
-        youtube_url=youtube_url,
-        download_url=str(download_url),
-        title=(data.get("title") or None),
-        duration_seconds=duration_seconds,
-        file_size_bytes=data.get("sizeBytes"),
-        cached=payload.get("cached"),
-        credits_used=payload.get("creditsUsed"),
-        raw=payload,
-    )
+        data = payload.get("data") or {}
+        download_url = data.get("downloadUrl") or data.get("url")
+        if not download_url:
+            last_error = ExternalDownloadError(
+                f"Captapi response missing downloadUrl: {payload}"
+            )
+            break
+
+        duration_ms = _safe_int(data.get("approxDurationMs") or data.get("durationMs"))
+        duration_seconds = int(duration_ms / 1000) if duration_ms is not None else None
+        download_url = _assert_safe_url(str(download_url))
+
+        return ExternalResolveResult(
+            provider="captapi",
+            youtube_url=youtube_url,
+            download_url=str(download_url),
+            title=(data.get("title") or None),
+            duration_seconds=duration_seconds,
+            file_size_bytes=data.get("sizeBytes"),
+            cached=payload.get("cached"),
+            credits_used=payload.get("creditsUsed"),
+            raw=payload,
+        )
+
+    if last_credit_error is not None:
+        raise last_credit_error
+    if last_error is not None:
+        raise last_error
+    raise ExternalDownloadError("Captapi request failed")
 
 
 def _tunelio_quality_preference() -> List[str]:
@@ -415,11 +498,11 @@ def probe_provider(
 def youtube_external_provider_chain() -> List[str]:
     """Default YouTube download order: Video Download API -> Tunelio -> Captapi."""
     chain: List[str] = []
-    if _video_download_api_key():
+    if _video_download_api_keys():
         chain.append("video-download-api")
     if _tunelio_key():
         chain.append("tunelio")
-    if _captapi_key():
+    if _captapi_keys():
         chain.append("captapi")
     return chain
 

@@ -18,7 +18,7 @@ from auto_subtitle.youtube_external_download import (
 
 
 class VideoDownloadApiResolveTests(unittest.TestCase):
-    @patch.dict(os.environ, {"VIDEO_DOWNLOAD_API_KEY": "vda_test"}, clear=False)
+    @patch.dict(os.environ, {"VIDEO_DOWNLOAD_API_KEY_1": "vda_test"}, clear=False)
     @patch("auto_subtitle.youtube_external_download._request_json")
     @patch("auto_subtitle.youtube_external_download.time.sleep")
     def test_resolve_video_download_api_returns_ready_url(
@@ -38,9 +38,40 @@ class VideoDownloadApiResolveTests(unittest.TestCase):
         self.assertIn("savenow.to", result.download_url)
         self.assertEqual(result.title, "Me at the zoo")
 
+    @patch.dict(
+        os.environ,
+        {
+            "VIDEO_DOWNLOAD_API_KEY_1": "vda_1",
+            "VIDEO_DOWNLOAD_API_KEY_2": "vda_2",
+        },
+        clear=False,
+    )
+    @patch("auto_subtitle.youtube_external_download._request_json")
+    @patch("auto_subtitle.youtube_external_download.time.sleep")
+    def test_resolve_video_download_api_tries_next_key_after_credit_error(
+        self,
+        _mock_sleep,
+        mock_request,
+    ) -> None:
+        def side_effect(url, **kwargs):
+            if "apikey=vda_1" in url:
+                raise ExternalCreditsExhaustedError("credits exhausted")
+            return {
+                "success": True,
+                "url": "https://worker.savenow.to/api/v2/download/token",
+                "filename": "Me at the zoo.mp4",
+                "title": "Me at the zoo",
+                "format": "720",
+            }
+
+        mock_request.side_effect = side_effect
+        result = resolve_video_download_api("https://www.youtube.com/watch?v=jNQXAC9IVRw")
+        self.assertEqual(result.provider, "video-download-api")
+        self.assertIn("savenow.to", result.download_url)
+
 
 class CaptapiResolveTests(unittest.TestCase):
-    @patch.dict(os.environ, {"CAPTAPI_API_KEY": "capt_live_test"}, clear=False)
+    @patch.dict(os.environ, {"CAPTAPI_API_KEY_1": "capt_live_test"}, clear=False)
     @patch("auto_subtitle.youtube_external_download._request_json")
     def test_resolve_captapi_returns_download_url(self, mock_request) -> None:
         mock_request.return_value = {
@@ -59,6 +90,36 @@ class CaptapiResolveTests(unittest.TestCase):
         self.assertEqual(result.title, "Me at the zoo")
         self.assertEqual(result.duration_seconds, 19)
         self.assertEqual(result.credits_used, 3)
+
+    @patch.dict(
+        os.environ,
+        {
+            "CAPTAPI_API_KEY_1": "capt_1",
+            "CAPTAPI_API_KEY_2": "capt_2",
+        },
+        clear=False,
+    )
+    @patch("auto_subtitle.youtube_external_download._request_json")
+    def test_resolve_captapi_tries_next_key_after_credit_error(self, mock_request) -> None:
+        def side_effect(url, **kwargs):
+            auth = (kwargs.get("headers") or {}).get("Authorization", "")
+            if auth == "Bearer capt_1":
+                raise ExternalCreditsExhaustedError("credits exhausted")
+            return {
+                "success": True,
+                "cached": False,
+                "creditsUsed": 3,
+                "data": {
+                    "title": "Me at the zoo",
+                    "downloadUrl": "https://redirector.googlevideo.com/videoplayback?id=abc",
+                    "approxDurationMs": "19000",
+                },
+            }
+
+        mock_request.side_effect = side_effect
+        result = resolve_captapi("https://www.youtube.com/watch?v=jNQXAC9IVRw")
+        self.assertEqual(result.provider, "captapi")
+        self.assertIn("googlevideo.com", result.download_url)
 
 
 class TunelioResolveTests(unittest.TestCase):
@@ -89,7 +150,7 @@ class TunelioResolveTests(unittest.TestCase):
 
 
 class ProbeProviderTests(unittest.TestCase):
-    @patch.dict(os.environ, {"CAPTAPI_API_KEY": "capt_live_test"}, clear=False)
+    @patch.dict(os.environ, {"CAPTAPI_API_KEY_1": "capt_live_test"}, clear=False)
     @patch("auto_subtitle.youtube_external_download.probe_download_head")
     @patch("auto_subtitle.youtube_external_download.resolve_captapi")
     def test_probe_provider_success(
@@ -120,17 +181,18 @@ class ProbeProviderTests(unittest.TestCase):
     @patch.dict(os.environ, {}, clear=True)
     def test_probe_provider_missing_key(self) -> None:
         os.environ.pop("CAPTAPI_API_KEY", None)
+        os.environ.pop("CAPTAPI_API_KEY_1", None)
         probe = probe_provider("captapi", "https://www.youtube.com/watch?v=jNQXAC9IVRw")
         self.assertFalse(probe.ok)
         self.assertEqual(probe.stage, "resolve")
-        self.assertIn("CAPTAPI_API_KEY", probe.error or "")
+        self.assertIn("CAPTAPI_API_KEY_1..4", probe.error or "")
 
     @patch.dict(
         os.environ,
         {
-            "VIDEO_DOWNLOAD_API_KEY": "vda_test",
+            "VIDEO_DOWNLOAD_API_KEY_1": "vda_test",
             "TUNELIO_API_KEY": "tnl_test",
-            "CAPTAPI_API_KEY": "capt_test",
+            "CAPTAPI_API_KEY_1": "capt_test",
         },
         clear=False,
     )

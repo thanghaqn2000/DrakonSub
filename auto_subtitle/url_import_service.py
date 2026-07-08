@@ -416,6 +416,179 @@ def _build_ydl_opts(
     return opts
 
 
+def _download_youtube_via_external(
+    safe_url: str,
+    out_dir: Path,
+    target: Path,
+    *,
+    external_provider: str,
+) -> Dict[str, Any]:
+    from .youtube_external_download import (
+        ExternalCreditsExhaustedError,
+        ExternalDownloadError,
+        download_youtube_via_external_api,
+    )
+
+    cleanup_partial_downloads(out_dir)
+    try:
+        result = download_youtube_via_external_api(
+            safe_url,
+            out_dir,
+            provider=external_provider,
+            output_filename=target.name,
+        )
+    except (ExternalCreditsExhaustedError, ExternalDownloadError):
+        cleanup_partial_downloads(out_dir)
+        raise
+    except Exception as exc:
+        cleanup_partial_downloads(out_dir)
+        raise ExternalDownloadError(str(exc)) from exc
+
+    duration = result.get("duration")
+    if duration and duration > MAX_DURATION_SECONDS:
+        cleanup_partial_downloads(out_dir)
+        raise UrlImportError(
+            "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
+        )
+
+    finalized = _finalize_downloaded_video(
+        out_dir,
+        target,
+        provider="youtube",
+        title=str(result.get("title") or "").strip(),
+        duration=duration if isinstance(duration, int) else None,
+    )
+    finalized["external_provider"] = external_provider
+    return finalized
+
+
+def _try_youtube_external_cascade(
+    safe_url: str,
+    out_dir: Path,
+    target: Path,
+) -> Optional[Dict[str, Any]]:
+    """Try external providers in configured priority before yt-dlp."""
+    from .youtube_external_download import (
+        ExternalCreditsExhaustedError,
+        ExternalDownloadError,
+        youtube_external_provider_chain,
+    )
+
+    for external_provider in youtube_external_provider_chain():
+        try:
+            return _download_youtube_via_external(
+                safe_url,
+                out_dir,
+                target,
+                external_provider=external_provider,
+            )
+        except UrlImportError:
+            cleanup_partial_downloads(out_dir)
+            raise
+        except ExternalCreditsExhaustedError:
+            cleanup_partial_downloads(out_dir)
+            continue
+        except ExternalDownloadError:
+            cleanup_partial_downloads(out_dir)
+            continue
+    return None
+
+
+def _download_youtube_with_ytdlp(
+    safe_url: str,
+    out_dir: Path,
+    target: Path,
+) -> Dict[str, Any]:
+    import yt_dlp
+
+    ydl_opts = _build_ydl_opts(out_dir, "youtube")
+    info: Dict[str, Any] = {}
+    duration = 0
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(safe_url, download=False) or {}
+            duration = info.get("duration") or 0
+            if duration and duration > MAX_DURATION_SECONDS:
+                raise UrlImportError(
+                    "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
+                )
+            ydl.download([safe_url])
+    except UrlImportError:
+        cleanup_partial_downloads(out_dir)
+        raise
+    except Exception as exc:
+        retry_succeeded = False
+        if _youtube_needs_browser_cookie_retry(exc, ydl_opts):
+            cleanup_partial_downloads(out_dir)
+            retry_opts = _build_ydl_opts(
+                out_dir,
+                "youtube",
+                use_browser_cookies=True,
+            )
+            if "cookiesfrombrowser" in retry_opts:
+                try:
+                    with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                        info = ydl.extract_info(safe_url, download=False) or {}
+                        duration = info.get("duration") or 0
+                        if duration and duration > MAX_DURATION_SECONDS:
+                            raise UrlImportError(
+                                "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
+                            )
+                        ydl.download([safe_url])
+                    retry_succeeded = True
+                except UrlImportError:
+                    cleanup_partial_downloads(out_dir)
+                    raise
+                except Exception as retry_exc:
+                    cleanup_partial_downloads(out_dir)
+                    raise _map_download_error(retry_exc, "youtube") from retry_exc
+            else:
+                cleanup_partial_downloads(out_dir)
+                raise _map_download_error(exc, "youtube") from exc
+        if not retry_succeeded:
+            cleanup_partial_downloads(out_dir)
+            raise _map_download_error(exc, "youtube") from exc
+
+    return _finalize_downloaded_video(
+        out_dir,
+        target,
+        provider="youtube",
+        title=str(info.get("title") or "").strip(),
+        duration=duration if duration else None,
+    )
+
+
+def _finalize_downloaded_video(
+    out_dir: Path,
+    target: Path,
+    *,
+    provider: str,
+    title: str,
+    duration: Optional[int],
+) -> Dict[str, Any]:
+    downloaded = _resolve_downloaded_path(out_dir, target)
+    downloaded = _normalize_downloaded_video(out_dir, downloaded)
+
+    size = downloaded.stat().st_size
+    if size <= 0:
+        cleanup_partial_downloads(out_dir)
+        raise _map_download_error(RuntimeError("empty file"), provider)
+    if size > MAX_FILE_BYTES:
+        cleanup_partial_downloads(out_dir)
+        raise UrlImportError(
+            "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
+        )
+
+    return {
+        "path": str(downloaded),
+        "provider": provider,
+        "title": title,
+        "duration": duration if duration else None,
+        "filesize": size,
+    }
+
+
 def _youtube_needs_browser_cookie_retry(exc: Exception, ydl_opts: Dict[str, Any]) -> bool:
     if "cookiefile" in ydl_opts or "cookiesfrombrowser" in ydl_opts:
         return False
@@ -438,9 +611,10 @@ def download_video_from_url(
     output_filename: str = "input.mp4",
 ) -> Dict[str, Any]:
     """
-    Download a public video into *output_dir* using yt-dlp.
+    Download a public video into *output_dir*.
 
-    Returns metadata dict with local path and provider.
+    YouTube order: Video Download API -> Tunelio -> Captapi -> yt-dlp.
+    Other providers use yt-dlp only.
     """
     import yt_dlp
 
@@ -450,6 +624,12 @@ def download_video_from_url(
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / output_filename
     cleanup_partial_downloads(out_dir)
+
+    if provider == "youtube":
+        external_result = _try_youtube_external_cascade(safe_url, out_dir, target)
+        if external_result is not None:
+            return external_result
+        return _download_youtube_with_ytdlp(safe_url, out_dir, target)
 
     ydl_opts = _build_ydl_opts(out_dir, provider)
     info: Dict[str, Any] = {}
@@ -468,57 +648,13 @@ def download_video_from_url(
         cleanup_partial_downloads(out_dir)
         raise
     except Exception as exc:
-        retry_succeeded = False
-        if provider == "youtube" and _youtube_needs_browser_cookie_retry(exc, ydl_opts):
-            cleanup_partial_downloads(out_dir)
-            retry_opts = _build_ydl_opts(
-                out_dir,
-                provider,
-                use_browser_cookies=True,
-            )
-            if "cookiesfrombrowser" in retry_opts:
-                try:
-                    with yt_dlp.YoutubeDL(retry_opts) as ydl:
-                        info = ydl.extract_info(safe_url, download=False) or {}
-                        duration = info.get("duration") or 0
-                        if duration and duration > MAX_DURATION_SECONDS:
-                            raise UrlImportError(
-                                "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
-                            )
-                        ydl.download([safe_url])
-                    retry_succeeded = True
-                except UrlImportError:
-                    cleanup_partial_downloads(out_dir)
-                    raise
-                except Exception as retry_exc:
-                    cleanup_partial_downloads(out_dir)
-                    raise _map_download_error(retry_exc, provider) from retry_exc
-            else:
-                cleanup_partial_downloads(out_dir)
-                raise _map_download_error(exc, provider) from exc
-        if not retry_succeeded:
-            cleanup_partial_downloads(out_dir)
-            raise _map_download_error(exc, provider) from exc
-
-    downloaded = _resolve_downloaded_path(out_dir, target)
-    downloaded = _normalize_downloaded_video(out_dir, downloaded)
-
-    size = downloaded.stat().st_size
-    if size <= 0:
         cleanup_partial_downloads(out_dir)
-        raise _map_download_error(RuntimeError("empty file"), provider)
-    if size > MAX_FILE_BYTES:
-        cleanup_partial_downloads(out_dir)
-        raise UrlImportError(
-            "Video quá dài hoặc quá nặng so với giới hạn hiện tại."
-        )
+        raise _map_download_error(exc, provider) from exc
 
-    title = str(info.get("title") or "").strip()
-
-    return {
-        "path": str(downloaded),
-        "provider": provider,
-        "title": title,
-        "duration": duration if duration else None,
-        "filesize": size,
-    }
+    return _finalize_downloaded_video(
+        out_dir,
+        target,
+        provider=provider,
+        title=str(info.get("title") or "").strip(),
+        duration=duration if duration else None,
+    )

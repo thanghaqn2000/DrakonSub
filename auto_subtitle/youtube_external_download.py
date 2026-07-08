@@ -53,6 +53,22 @@ class ExternalCreditsExhaustedError(ExternalDownloadError):
     """Provider has no credits left; caller may try the next provider."""
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _assert_safe_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ExternalDownloadError(f"Unsafe external URL scheme: {parsed.scheme or '<empty>'}")
+    return url
+
+
 def _is_credits_exhausted(http_code: int, detail: str, payload: Optional[Dict[str, Any]] = None) -> bool:
     text = detail.lower()
     if http_code == 402:
@@ -82,8 +98,9 @@ def _request_json(
     headers: Optional[Dict[str, str]] = None,
     timeout: int = 60,
 ) -> Dict[str, Any]:
+    safe_url = _assert_safe_url(url)
     req = urllib.request.Request(
-        url,
+        safe_url,
         headers={
             "Accept": "application/json",
             "User-Agent": DEFAULT_USER_AGENT,
@@ -159,7 +176,7 @@ def resolve_video_download_api(
 
     started = time.time()
     while not payload.get("url"):
-        progress_url = str(payload.get("progress_url") or "").strip()
+        progress_url = _assert_safe_url(str(payload.get("progress_url") or "").strip())
         if not progress_url:
             raise ExternalDownloadError(
                 f"Video Download API response missing url/progress_url: {payload}"
@@ -173,7 +190,7 @@ def resolve_video_download_api(
                 f"Video Download API credits exhausted: {payload}"
             )
 
-    download_url = str(payload.get("url") or "").strip()
+    download_url = _assert_safe_url(str(payload.get("url") or "").strip())
     if not download_url:
         raise ExternalDownloadError(f"Video Download API missing download url: {payload}")
 
@@ -208,13 +225,9 @@ def resolve_captapi(youtube_url: str) -> ExternalResolveResult:
     if not download_url:
         raise ExternalDownloadError(f"Captapi response missing downloadUrl: {payload}")
 
-    duration_ms = data.get("approxDurationMs") or data.get("durationMs")
-    duration_seconds = None
-    if duration_ms is not None:
-        try:
-            duration_seconds = int(int(duration_ms) / 1000)
-        except (TypeError, ValueError):
-            duration_seconds = None
+    duration_ms = _safe_int(data.get("approxDurationMs") or data.get("durationMs"))
+    duration_seconds = int(duration_ms / 1000) if duration_ms is not None else None
+    download_url = _assert_safe_url(str(download_url))
 
     return ExternalResolveResult(
         provider="captapi",
@@ -257,7 +270,11 @@ def _pick_tunelio_quality(info: Dict[str, Any], preferred: str = "720p") -> str:
         if quality in available:
             return quality
     if available:
-        return sorted(available)[-1]
+        def _quality_rank(value: str) -> int:
+            digits = "".join(ch for ch in value if ch.isdigit())
+            return int(digits) if digits else -1
+
+        return max(available, key=_quality_rank)
     raise ExternalDownloadError(f"Tunelio info has no video formats: {info}")
 
 
@@ -292,9 +309,9 @@ def resolve_tunelio(youtube_url: str, *, quality: str = "720p") -> ExternalResol
     return ExternalResolveResult(
         provider="tunelio",
         youtube_url=youtube_url,
-        download_url=str(download_url),
+        download_url=_assert_safe_url(str(download_url)),
         title=(payload.get("filename") or info.get("title") or None),
-        duration_seconds=info.get("duration_seconds"),
+        duration_seconds=_safe_int(info.get("duration_seconds")),
         file_size_bytes=payload.get("file_size"),
         cached=None,
         credits_used=None,

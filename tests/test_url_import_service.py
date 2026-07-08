@@ -365,6 +365,13 @@ class UrlImportServiceTests(unittest.TestCase):
             )
         self.assertEqual(result["external_provider"], "captapi")
         self.assertEqual(mock_external.call_count, 3)
+        providers_called = [
+            call.kwargs["external_provider"] for call in mock_external.call_args_list
+        ]
+        self.assertEqual(
+            providers_called,
+            ["video-download-api", "tunelio", "captapi"],
+        )
         mock_ytdlp.assert_not_called()
 
     @patch.dict(
@@ -404,6 +411,13 @@ class UrlImportServiceTests(unittest.TestCase):
             )
         self.assertEqual(result["provider"], "youtube")
         self.assertEqual(mock_external.call_count, 3)
+        providers_called = [
+            call.kwargs["external_provider"] for call in mock_external.call_args_list
+        ]
+        self.assertEqual(
+            providers_called,
+            ["video-download-api", "tunelio", "captapi"],
+        )
         mock_ytdlp.assert_called_once()
 
 

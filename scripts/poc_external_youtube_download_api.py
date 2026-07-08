@@ -50,8 +50,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--providers",
-        default="captapi,tunelio",
-        help="Comma-separated providers to test (captapi,tunelio)",
+        default="video-download-api,captapi,tunelio",
+        help="Comma-separated providers to test (video-download-api,captapi,tunelio)",
     )
     parser.add_argument(
         "--urls",
@@ -76,16 +76,19 @@ def main() -> int:
     if missing_keys:
         print("Missing API keys for:", ", ".join(missing_keys))
         print("Set env vars:")
+        if "video-download-api" in missing_keys:
+            print("  export VIDEO_DOWNLOAD_API_KEY=...")
         if "captapi" in missing_keys:
             print("  export CAPTAPI_API_KEY=capt_live_...")
         if "tunelio" in missing_keys:
             print("  export TUNELIO_API_KEY=tnl_...")
         print("\nSignup:")
+        print("  Video Download API: https://video-download-api.com/get-api-key")
         print("  Captapi: https://captapi.com/dashboard/api-keys")
         print("  Tunelio: https://tunelio.dev/")
         return 2
 
-    providers = [p for p in requested if p in configured]
+    providers = requested
     urls = [u.strip() for u in args.urls.split(",") if u.strip()]
 
     probes: list[ExternalDownloadProbe] = []
@@ -122,10 +125,11 @@ def main() -> int:
             "",
             "## Notes",
             "",
+            "- Video Download API: GET https://p.savenow.to/api/v2/download?format=720&url=...&apikey=...&worker_prepare=1",
             "- Captapi: GET https://api.captapi.com/v1/youtube/video-download",
             "- Tunelio: GET https://tunelio.dev/create",
             "- This POC only verifies resolve + first 1MB download probe.",
-            "- Add keys via CAPTAPI_API_KEY / TUNELIO_API_KEY before running.",
+            "- Add keys via VIDEO_DOWNLOAD_API_KEY / CAPTAPI_API_KEY / TUNELIO_API_KEY before running.",
             "",
         ]
     )

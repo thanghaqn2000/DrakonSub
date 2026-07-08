@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -299,12 +300,14 @@ class UrlImportServiceTests(unittest.TestCase):
         self.assertNotIn("cookiesfrombrowser", first_opts)
         self.assertEqual(second_opts["cookiesfrombrowser"], ("chrome",))
 
+    @patch("auto_subtitle.url_import_service._try_youtube_external_cascade", return_value=None)
     @patch("yt_dlp.YoutubeDL")
     @patch("auto_subtitle.url_import_service._browser_cookie_source", return_value=None)
     def test_youtube_reload_error_maps_to_friendly_bot_message_without_cookie_fallback(
         self,
         _mock_browser_cookie_source,
         mock_ydl,
+        _mock_external_cascade,
     ) -> None:
         instance = mock_ydl.return_value.__enter__.return_value
         instance.extract_info.side_effect = RuntimeError("The page needs to be reloaded.")
@@ -324,6 +327,84 @@ class UrlImportServiceTests(unittest.TestCase):
             partial.write_bytes(b"x")
             cleanup_partial_downloads(root)
             self.assertFalse(partial.exists())
+
+    @patch.dict(
+        os.environ,
+        {
+            "VIDEO_DOWNLOAD_API_KEY": "vda_test",
+            "TUNELIO_API_KEY": "tnl_test",
+            "CAPTAPI_API_KEY": "capt_test",
+        },
+        clear=False,
+    )
+    @patch("auto_subtitle.url_import_service._download_youtube_with_ytdlp")
+    @patch("auto_subtitle.url_import_service._download_youtube_via_external")
+    def test_youtube_tries_tunelio_then_captapi_before_ytdlp(
+        self,
+        mock_external,
+        mock_ytdlp,
+    ) -> None:
+        from auto_subtitle.youtube_external_download import ExternalCreditsExhaustedError
+
+        mock_external.side_effect = [
+            ExternalCreditsExhaustedError("video-download-api credits exhausted"),
+            ExternalCreditsExhaustedError("tunelio credits exhausted"),
+            {
+                "path": "/tmp/input.mp4",
+                "provider": "youtube",
+                "title": "demo",
+                "duration": 10,
+                "filesize": 123,
+                "external_provider": "captapi",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = download_video_from_url(
+                "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+                tmp,
+            )
+        self.assertEqual(result["external_provider"], "captapi")
+        self.assertEqual(mock_external.call_count, 3)
+        mock_ytdlp.assert_not_called()
+
+    @patch.dict(
+        os.environ,
+        {
+            "VIDEO_DOWNLOAD_API_KEY": "vda_test",
+            "TUNELIO_API_KEY": "tnl_test",
+            "CAPTAPI_API_KEY": "capt_test",
+        },
+        clear=False,
+    )
+    @patch("auto_subtitle.url_import_service._download_youtube_with_ytdlp")
+    @patch("auto_subtitle.url_import_service._download_youtube_via_external")
+    def test_youtube_falls_back_to_ytdlp_when_external_credits_exhausted(
+        self,
+        mock_external,
+        mock_ytdlp,
+    ) -> None:
+        from auto_subtitle.youtube_external_download import ExternalCreditsExhaustedError
+
+        mock_external.side_effect = [
+            ExternalCreditsExhaustedError("video-download-api credits exhausted"),
+            ExternalCreditsExhaustedError("tunelio credits exhausted"),
+            ExternalCreditsExhaustedError("captapi credits exhausted"),
+        ]
+        mock_ytdlp.return_value = {
+            "path": "/tmp/input.mp4",
+            "provider": "youtube",
+            "title": "demo",
+            "duration": 10,
+            "filesize": 123,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            result = download_video_from_url(
+                "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+                tmp,
+            )
+        self.assertEqual(result["provider"], "youtube")
+        self.assertEqual(mock_external.call_count, 3)
+        mock_ytdlp.assert_called_once()
 
 
 if __name__ == "__main__":

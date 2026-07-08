@@ -17,6 +17,7 @@ class HealthEndpointTests(unittest.TestCase):
         self.client = TestClient(web.app)
 
     def tearDown(self) -> None:
+        self.client.close()
         self.jobs_root_patcher.stop()
 
     def test_health_returns_ok_without_secrets(self) -> None:
@@ -30,7 +31,16 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", res.text)
 
     def test_defaults_returns_distinct_engine_labels(self) -> None:
-        res = self.client.get("/api/defaults")
+        with patch(
+            "auto_subtitle.web.check_gemini_capability",
+            return_value={
+                "configured": False,
+                "available": False,
+                "reason": "not_configured",
+                "message": "Chưa cấu hình GEMINI_API_KEY.",
+            },
+        ):
+            res = self.client.get("/api/defaults")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(

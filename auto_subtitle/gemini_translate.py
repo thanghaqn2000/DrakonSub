@@ -1,10 +1,12 @@
 import json
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import (
     get_gemini_model,
@@ -71,12 +73,128 @@ _MODEL_ALIASES = {
     ],
 }
 
+_CAPABILITY_CACHE_TTL_SECONDS = 10 * 60
+_capability_lock = threading.Lock()
+_capability_cache: Optional[Dict[str, Any]] = None
+_capability_cached_at: float = 0.0
 
-def _list_gemini_models(api_key: str) -> List[str]:
+_LOCATION_MESSAGE = (
+    "Gemini đang bị Google chặn theo location của server hiện tại. "
+    "Tạm thời hãy dùng Google hoặc OpenAI."
+)
+_UNAVAILABLE_JOB_MESSAGE = (
+    "Gemini hiện chưa khả dụng trên server này do giới hạn location từ Google. "
+    "Vui lòng chọn Google hoặc OpenAI."
+)
+
+
+def reset_gemini_capability_cache() -> None:
+    global _capability_cache, _capability_cached_at
+    with _capability_lock:
+        _capability_cache = None
+        _capability_cached_at = 0.0
+
+
+def classify_gemini_error(detail: str) -> str:
+    text = (detail or "").lower()
+    if (
+        "user location is not supported for the api use" in text
+        or "failed_precondition" in text
+    ):
+        return "location_restricted"
+    if "401" in text or "403" in text or "unauthorized" in text or "forbidden" in text:
+        return "auth_error"
+    if "429" in text or "quota" in text or "rate limit" in text:
+        return "quota_error"
+    if (
+        "timeout" in text
+        or "timed out" in text
+        or "dns" in text
+        or "name or service not known" in text
+        or "network" in text
+        or "connection" in text
+    ):
+        return "network_error"
+    return "unknown"
+
+
+def _capability_message(reason: Optional[str]) -> str:
+    if reason == "location_restricted":
+        return _LOCATION_MESSAGE
+    if reason == "auth_error":
+        return "Gemini API key không hợp lệ hoặc bị từ chối. Kiểm tra lại GEMINI_API_KEY."
+    if reason == "quota_error":
+        return "Gemini tạm thời hết quota. Vui lòng thử lại sau hoặc dùng Google/OpenAI."
+    if reason == "network_error":
+        return "Không kết nối được Gemini API từ server hiện tại. Vui lòng thử lại sau."
+    if reason == "not_configured":
+        return "Chưa cấu hình GEMINI_API_KEY."
+    if reason is None:
+        return ""
+    return "Gemini hiện chưa khả dụng trên server này. Tạm thời hãy dùng Google hoặc OpenAI."
+
+
+def check_gemini_capability(*, force: bool = False) -> Dict[str, Any]:
+    """Probe whether Gemini API can be used from this runtime environment."""
+    global _capability_cache, _capability_cached_at
+
+    with _capability_lock:
+        if (
+            not force
+            and _capability_cache is not None
+            and (time.time() - _capability_cached_at) < _CAPABILITY_CACHE_TTL_SECONDS
+        ):
+            return dict(_capability_cache)
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        result = {
+            "configured": False,
+            "available": False,
+            "reason": "not_configured",
+            "message": _capability_message("not_configured"),
+        }
+        with _capability_lock:
+            _capability_cache = dict(result)
+            _capability_cached_at = time.time()
+        return result
+
+    try:
+        _list_gemini_models(api_key, timeout=8)
+        result = {
+            "configured": True,
+            "available": True,
+            "reason": None,
+            "message": "",
+        }
+    except Exception as exc:
+        reason = classify_gemini_error(str(exc))
+        print(f"[Gemini capability] probe failed ({reason}): {exc}")
+        result = {
+            "configured": True,
+            "available": False,
+            "reason": reason,
+            "message": _capability_message(reason),
+        }
+
+    with _capability_lock:
+        _capability_cache = dict(result)
+        _capability_cached_at = time.time()
+    return dict(result)
+
+
+def gemini_unavailable_job_message(capability: Optional[Dict[str, Any]] = None) -> str:
+    cap = capability or check_gemini_capability()
+    if cap.get("reason") == "location_restricted":
+        return _UNAVAILABLE_JOB_MESSAGE
+    return str(cap.get("message") or _capability_message(cap.get("reason")))
+
+
+def _list_gemini_models(api_key: str, *, timeout: int = 30) -> List[str]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     request = urllib.request.Request(url=url, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -96,6 +214,11 @@ def _list_gemini_models(api_key: str) -> List[str]:
 
 def _resolve_gemini_model(api_key: str, requested_model: str) -> str:
     requested = requested_model.strip()
+    explicit_model = (os.getenv("GEMINI_MODEL") or "").strip()
+    # Prefer the configured model directly to avoid an extra listModels call.
+    if explicit_model and requested == explicit_model:
+        return requested
+
     available = _list_gemini_models(api_key)
     if requested in available:
         return requested

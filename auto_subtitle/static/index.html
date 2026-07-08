@@ -171,6 +171,13 @@
       margin-bottom: 0.4rem;
     }
 
+    #translation-engine-hint {
+      margin-top: 0.45rem;
+      font-size: 0.82rem;
+      color: #fbbf24;
+      line-height: 1.35;
+    }
+
     .field input {
       width: 100%;
       padding: 0.65rem 0.85rem;
@@ -761,6 +768,7 @@
           <option value="openai">OpenAI</option>
           <option value="gemini">Gemini</option>
         </select>
+        <div id="translation-engine-hint" class="hint hidden"></div>
       </div>
 
       <div class="field">
@@ -934,6 +942,7 @@
     const topicField = document.getElementById("topic-field");
     const translationEngineField = document.getElementById("translation-engine-field");
     const translationEngineSelect = document.getElementById("translation-engine");
+    const translationEngineHint = document.getElementById("translation-engine-hint");
     const outputName = document.getElementById("output-name");
     const generateBtn = document.getElementById("generate-btn");
     const editLayoutBtn = document.getElementById("edit-layout-btn");
@@ -1050,17 +1059,35 @@
         const data = await res.json();
         defaultLayout = data.default_layout;
         const engineLabels = data.translation_engine_labels || {};
+        const engineCaps = (data.engine_capabilities || {});
+        const geminiCap = engineCaps.gemini || {};
         if (Array.isArray(data.translation_engines)) {
           translationEngineSelect.innerHTML = "";
           data.translation_engines.forEach((engine) => {
             const opt = document.createElement("option");
             opt.value = engine;
-            opt.textContent = engineLabels[engine] || engine;
+            let label = engineLabels[engine] || engine;
+            if (engine === "gemini" && geminiCap.configured && geminiCap.available === false) {
+              opt.disabled = true;
+              label = "Gemini — chưa khả dụng trên server hiện tại";
+            }
+            opt.textContent = label;
             translationEngineSelect.appendChild(opt);
           });
         }
         if (data.translation_engine) {
           translationEngineSelect.value = data.translation_engine;
+        }
+        if (
+          geminiCap.configured &&
+          geminiCap.available === false &&
+          geminiCap.message
+        ) {
+          translationEngineHint.textContent = geminiCap.message;
+          translationEngineHint.classList.remove("hidden");
+        } else {
+          translationEngineHint.textContent = "";
+          translationEngineHint.classList.add("hidden");
         }
       } catch (_) {}
     }

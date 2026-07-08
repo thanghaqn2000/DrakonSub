@@ -19,6 +19,10 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .gemini_translate import (
+    check_gemini_capability,
+    gemini_unavailable_job_message,
+)
 from .pipeline import SubtitleConfig, generate_vietsub, reburn_subtitles
 from .subtitle_edit_service import (
     SubtitleEditError,
@@ -490,6 +494,10 @@ def _parse_job_creation_fields(
         raise ValueError(
             "translation_engine must be one of: " + ", ".join(SUPPORTED_TRANSLATION_ENGINES)
         )
+    if engine == "gemini":
+        capability = check_gemini_capability()
+        if not capability.get("available"):
+            raise ValueError(gemini_unavailable_job_message(capability))
     defaults = SubtitleConfig.from_env()
     parsed_font_size = (
         parse_font_size(font_size, defaults.subtitle_font_size)
@@ -719,15 +727,28 @@ def health_check():
 @app.get("/api/defaults")
 def get_defaults():
     config = SubtitleConfig.from_env()
+    gemini_cap = check_gemini_capability()
+    selected_engine = config.translation_engine
+    if selected_engine == "gemini" and not gemini_cap.get("available"):
+        # Prefer env-configured google first when Gemini is blocked on this host.
+        selected_engine = "google" if "google" in SUPPORTED_TRANSLATION_ENGINES else "openai"
     return {
         "subtitle_font_size": config.subtitle_font_size,
         "subtitle_font_color": config.subtitle_font_color,
         "openai_model": get_openai_model(),
-        "translation_engine": config.translation_engine,
+        "translation_engine": selected_engine,
         "translation_engines": list(SUPPORTED_TRANSLATION_ENGINES),
         "translation_engine_labels": {
             engine: TRANSLATION_ENGINE_LABELS.get(engine, engine.title())
             for engine in SUPPORTED_TRANSLATION_ENGINES
+        },
+        "engine_capabilities": {
+            "gemini": {
+                "configured": bool(gemini_cap.get("configured")),
+                "available": bool(gemini_cap.get("available")),
+                "reason": gemini_cap.get("reason"),
+                "message": gemini_cap.get("message") or "",
+            }
         },
         "default_layout": default_layout_dict(),
         "font_presets": list(FONT_FAMILY_CHOICES),

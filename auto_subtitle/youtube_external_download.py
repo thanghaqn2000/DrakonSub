@@ -213,11 +213,17 @@ def resolve_video_download_api(
         while not payload.get("url"):
             progress_url = _assert_safe_url(str(payload.get("progress_url") or "").strip())
             if not progress_url:
-                raise ExternalDownloadError(
+                last_error = ExternalDownloadError(
                     f"Video Download API response missing url/progress_url: {payload}"
                 )
+                payload = {}
+                break
             if time.time() - started > poll_timeout_seconds:
-                raise ExternalDownloadError("Video Download API progress polling timed out")
+                last_error = ExternalDownloadError(
+                    "Video Download API progress polling timed out"
+                )
+                payload = {}
+                break
             time.sleep(2)
             try:
                 payload = _request_json(progress_url, timeout=60)

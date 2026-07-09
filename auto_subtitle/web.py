@@ -55,6 +55,7 @@ from .voiceover.job_service import (
     VoiceoverJobOptions,
     run_voiceover_job,
 )
+from .voiceover.saydi_tts import SaydiConfigError, load_saydi_config, validate_saydi_sample
 from .voiceover.script_job import (
     DEFAULT_ORIGINAL_VOLUME,
     ScriptRenderOptions,
@@ -163,6 +164,17 @@ def _sanitize_voiceover_error(message: str) -> str:
     for token_key in ("SAYDI_TTS_API_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY"):
         text = text.replace(os.getenv(token_key, ""), "") if os.getenv(token_key, "") else text
     return text or "Voiceover job failed"
+
+
+def _parse_optional_saydi_sample(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(400, "Giọng đọc Saydi không hợp lệ. Vui lòng kiểm tra mã giọng/sample.")
+    try:
+        return validate_saydi_sample(raw)
+    except SaydiConfigError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _voiceover_utc_now() -> str:
@@ -386,6 +398,7 @@ def _run_voiceover_from_video_background(
     min_gap_ms: int,
     max_borrow_after_ms: int,
     severe_overflow_ms: int,
+    saydi_sample: Optional[str] = None,
 ) -> None:
     output_path = job_dir / "output_voiceover.mp4"
     manifest_path = job_dir / "manifest.json"
@@ -433,6 +446,7 @@ def _run_voiceover_from_video_background(
             min_gap_ms=min_gap_ms,
             max_borrow_after_ms=max_borrow_after_ms,
             severe_overflow_ms=severe_overflow_ms,
+            saydi_sample=saydi_sample,
             force=True,
         )
         result = run_voiceover_job(options, progress_callback=tts_progress_callback)
@@ -1195,6 +1209,16 @@ def get_defaults():
     }
 
 
+@app.get("/api/voiceover/config")
+def get_voiceover_config():
+    cfg = load_saydi_config()
+    return {
+        "default_original_volume": DEFAULT_ORIGINAL_VOLUME,
+        "default_voice_volume": 1.0,
+        "default_saydi_sample": cfg.sample,
+    }
+
+
 @app.post("/api/voiceover/jobs")
 async def create_voiceover_job(
     input_video: UploadFile = File(...),
@@ -1207,11 +1231,13 @@ async def create_voiceover_job(
     min_gap_ms: int = Form(120),
     max_borrow_after_ms: int = Form(1200),
     severe_overflow_ms: int = Form(2000),
+    saydi_sample: str = Form(""),
 ):
     if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(400, "Unsupported input video format")
     if not voiceover_srt.filename or Path(voiceover_srt.filename).suffix.lower() != ".srt":
         raise HTTPException(400, "Unsupported voiceover SRT format")
+    parsed_saydi_sample = _parse_optional_saydi_sample(saydi_sample)
 
     job_id = str(uuid.uuid4())
     job_dir = VOICEOVER_JOBS_ROOT / job_id
@@ -1257,6 +1283,7 @@ async def create_voiceover_job(
         min_gap_ms=min_gap_ms,
         max_borrow_after_ms=max_borrow_after_ms,
         severe_overflow_ms=severe_overflow_ms,
+        saydi_sample=parsed_saydi_sample,
         force=True,
     )
     threading.Thread(
@@ -1284,9 +1311,11 @@ async def create_voiceover_job_from_video(
     min_gap_ms: int = Form(120),
     max_borrow_after_ms: int = Form(1200),
     severe_overflow_ms: int = Form(2000),
+    saydi_sample: str = Form(""),
 ):
     if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(400, "Unsupported input video format")
+    parsed_saydi_sample = _parse_optional_saydi_sample(saydi_sample)
 
     job_id = str(uuid.uuid4())
     job_dir = VOICEOVER_JOBS_ROOT / job_id
@@ -1330,6 +1359,7 @@ async def create_voiceover_job_from_video(
             "min_gap_ms": min_gap_ms,
             "max_borrow_after_ms": max_borrow_after_ms,
             "severe_overflow_ms": severe_overflow_ms,
+            "saydi_sample": parsed_saydi_sample,
         },
         daemon=True,
     ).start()
@@ -1502,6 +1532,7 @@ def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=d
         min_gap_ms=int(body.get("min_gap_ms", 120)),
         max_borrow_after_ms=int(body.get("max_borrow_after_ms", 1200)),
         severe_overflow_ms=int(body.get("severe_overflow_ms", 2000)),
+        saydi_sample=_parse_optional_saydi_sample(body.get("saydi_sample")),
     )
 
     _voiceover_update_job_json(
@@ -1515,6 +1546,7 @@ def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=d
                 "original_volume": options.original_volume,
                 "voice_volume": options.voice_volume,
                 "prepare_text": options.prepare_text,
+                "saydi_sample": load_saydi_config(sample_override=options.saydi_sample).sample,
             },
         },
     )

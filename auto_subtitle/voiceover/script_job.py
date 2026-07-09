@@ -24,6 +24,7 @@ class ScriptRenderOptions:
     min_gap_ms: int = 120
     max_borrow_after_ms: int = 1200
     severe_overflow_ms: int = 2000
+    saydi_sample: str | None = None
 
 
 def voiceover_srt_path(job_dir: Path) -> Path:
@@ -152,6 +153,7 @@ def render_script_job(
         min_gap_ms=options.min_gap_ms,
         max_borrow_after_ms=options.max_borrow_after_ms,
         severe_overflow_ms=options.severe_overflow_ms,
+        saydi_sample=options.saydi_sample,
         force=True,
     )
     return run_voiceover_job(job_options, progress_callback=on_progress)

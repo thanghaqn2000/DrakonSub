@@ -1,0 +1,15 @@
+1
+00:00:02,000 --> 00:00:03,200
+Trong khoảnh khắc rất ngắn này, người nghe vẫn cần một câu thuyết minh dài và rõ để thấy bài toán overflow xuất hiện ngay lập tức.
+
+2
+00:00:05,000 --> 00:00:07,000
+Đây là câu có khoảng nghỉ phía sau đủ rộng để planner mượn thêm thời gian đọc tự nhiên hơn.
+
+3
+00:00:07,300 --> 00:00:08,800
+Câu này lại ở sát cue kế tiếp nên gần như không còn chỗ mượn thêm, buộc hệ thống phải cảnh báo rõ ràng.
+
+4
+00:00:12,000 --> 00:00:13,600
+Và đây là cue cuối, có thể kéo đến gần cuối video nếu vẫn còn an toàn.

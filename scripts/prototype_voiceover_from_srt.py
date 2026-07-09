@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from auto_subtitle.voiceover.audio_builder import (  # noqa: E402
+    build_manifest_summary,
     build_segment_manifests,
     build_voiceover_track,
     manifests_to_dicts,
@@ -28,8 +29,7 @@ from auto_subtitle.voiceover.audio_mixer import (  # noqa: E402
 )
 from auto_subtitle.voiceover.saydi_tts import load_saydi_config, synthesize_to_file  # noqa: E402
 from auto_subtitle.voiceover.srt_parser import parse_voiceover_srt  # noqa: E402
-
-DEFAULT_JOB_DIR = ROOT / "voiceover_jobs" / "prototype"
+from auto_subtitle.voiceover.timing_planner import plan_timing  # noqa: E402
 
 
 def _utc_now() -> str:
@@ -48,11 +48,15 @@ def run_prototype(
     job_dir: Path,
     original_volume: float,
     voice_volume: float,
+    min_gap_ms: int,
+    max_borrow_after_ms: int,
+    severe_overflow_ms: int,
     force: bool,
 ) -> dict:
     if output_video.exists() and not force:
         raise FileExistsError(f"Output exists: {output_video} (pass --force to overwrite)")
 
+    effective_job_dir = job_dir or output_video.parent
     cues = parse_voiceover_srt(voiceover_srt)
     if not cues:
         raise ValueError(f"No cues found in {voiceover_srt}")
@@ -60,7 +64,7 @@ def run_prototype(
     video_duration_ms = probe_video_duration_ms(input_video)
     has_original_audio = video_has_audio_stream(input_video)
 
-    segments_dir = job_dir / "segments"
+    segments_dir = effective_job_dir / "segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
 
     segment_paths: list[Path] = []
@@ -73,16 +77,25 @@ def run_prototype(
         segment_paths.append(segment_path)
         tts_durations_ms.append(probe_audio_duration_ms(segment_path))
 
-    manifests = build_segment_manifests(cues, segment_paths, tts_durations_ms)
+    timing_plans = plan_timing(
+        cues,
+        tts_durations_ms,
+        video_duration_ms=video_duration_ms,
+        min_gap_ms=min_gap_ms,
+        max_borrow_after_ms=max_borrow_after_ms,
+        severe_overflow_ms=severe_overflow_ms,
+    )
+    manifests = build_segment_manifests(cues, segment_paths, timing_plans)
+    summary = build_manifest_summary(timing_plans)
 
-    voiceover_track = job_dir / "voiceover_track.wav"
+    voiceover_track = effective_job_dir / "voiceover_track.wav"
     build_voiceover_track(
         manifests=manifests,
         video_duration_ms=video_duration_ms,
         output_path=voiceover_track,
     )
 
-    mixed_audio = job_dir / "mixed_audio.wav"
+    mixed_audio = effective_job_dir / "mixed_audio.wav"
     mix_audio_tracks(
         original_audio_source=input_video,
         voiceover_track=voiceover_track,
@@ -107,16 +120,22 @@ def run_prototype(
         "has_original_audio": has_original_audio,
         "original_volume": original_volume,
         "voice_volume": voice_volume,
+        "timing_config": {
+            "min_gap_ms": min_gap_ms,
+            "max_borrow_after_ms": max_borrow_after_ms,
+            "severe_overflow_ms": severe_overflow_ms,
+        },
         "segments": manifests_to_dicts(manifests),
+        "summary": summary,
         "artifacts": {
             "segments_dir": str(segments_dir.resolve()),
             "voiceover_track": str(voiceover_track.resolve()),
             "mixed_audio": str(mixed_audio.resolve()),
         },
-        "overflow_warnings": sum(1 for item in manifests if item.has_overflow),
+        "overflow_warnings": summary["overflow_warning_count"] + summary["severe_overflow_count"],
     }
 
-    manifest_path = job_dir / "manifest.json"
+    manifest_path = effective_job_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest["manifest_path"] = str(manifest_path.resolve())
     return manifest
@@ -127,9 +146,12 @@ def main() -> int:
     parser.add_argument("--input-video", required=True, type=Path)
     parser.add_argument("--voiceover-srt", required=True, type=Path)
     parser.add_argument("--output-video", required=True, type=Path)
-    parser.add_argument("--job-dir", default=str(DEFAULT_JOB_DIR), type=Path)
+    parser.add_argument("--job-dir", default=None, type=Path)
     parser.add_argument("--original-volume", type=float, default=0.30)
     parser.add_argument("--voice-volume", type=float, default=1.00)
+    parser.add_argument("--min-gap-ms", type=int, default=120)
+    parser.add_argument("--max-borrow-after-ms", type=int, default=1200)
+    parser.add_argument("--severe-overflow-ms", type=int, default=2000)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -147,6 +169,9 @@ def main() -> int:
             job_dir=args.job_dir,
             original_volume=args.original_volume,
             voice_volume=args.voice_volume,
+            min_gap_ms=args.min_gap_ms,
+            max_borrow_after_ms=args.max_borrow_after_ms,
+            severe_overflow_ms=args.severe_overflow_ms,
             force=args.force,
         )
     except Exception as exc:
@@ -157,6 +182,7 @@ def main() -> int:
     print(f"manifest={manifest['manifest_path']}")
     print(f"segments={len(manifest['segments'])}")
     print(f"overflow_warnings={manifest['overflow_warnings']}")
+    print(f"summary={json.dumps(manifest['summary'], ensure_ascii=False)}")
     return 0
 
 

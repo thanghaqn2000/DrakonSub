@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .srt_parser import VoiceoverCue
+from .timing_planner import TimingPlan
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +17,17 @@ SAMPLE_RATE = 24_000
 class SegmentManifest:
     index: int
     text: str
-    cue_start_ms: int
-    cue_end_ms: int
+    original_start_ms: int
+    original_end_ms: int
     cue_duration_ms: int
     segment_path: str
     tts_duration_ms: int
+    planned_start_ms: int
+    planned_end_ms: int
     overflow_ms: int
-    placement: str
+    borrowed_gap_after_ms: int
+    overlap_next_ms: int
+    status: str
 
     @property
     def has_overflow(self) -> bool:
@@ -84,33 +89,37 @@ def probe_video_duration_ms(path: Path) -> int:
 def build_segment_manifests(
     cues: list[VoiceoverCue],
     segment_paths: list[Path],
-    tts_durations_ms: list[int],
+    plans: list[TimingPlan],
 ) -> list[SegmentManifest]:
-    if not (len(cues) == len(segment_paths) == len(tts_durations_ms)):
-        raise ValueError("Cue, segment path, and duration lists must align")
+    if not (len(cues) == len(segment_paths) == len(plans)):
+        raise ValueError("Cue, segment path, and timing plan lists must align")
 
     manifests: list[SegmentManifest] = []
-    for cue, segment_path, tts_duration_ms in zip(cues, segment_paths, tts_durations_ms):
-        overflow_ms = max(0, tts_duration_ms - cue.duration_ms)
-        if overflow_ms > 0:
+    for cue, segment_path, plan in zip(cues, segment_paths, plans):
+        if plan.overflow_ms > 0:
             logger.warning(
-                "Cue %s TTS (%sms) exceeds cue window (%sms) by %sms; allowing mild overflow",
+                "Cue %s planned as %s; overflow=%sms borrowed=%sms overlap_next=%sms",
                 cue.index,
-                tts_duration_ms,
-                cue.duration_ms,
-                overflow_ms,
+                plan.status,
+                plan.overflow_ms,
+                plan.borrowed_gap_after_ms,
+                plan.overlap_next_ms,
             )
         manifests.append(
             SegmentManifest(
                 index=cue.index,
                 text=cue.text,
-                cue_start_ms=cue.start_ms,
-                cue_end_ms=cue.end_ms,
+                original_start_ms=cue.start_ms,
+                original_end_ms=cue.end_ms,
                 cue_duration_ms=cue.duration_ms,
                 segment_path=str(segment_path),
-                tts_duration_ms=tts_duration_ms,
-                overflow_ms=overflow_ms,
-                placement="start_aligned",
+                tts_duration_ms=plan.tts_duration_ms,
+                planned_start_ms=plan.planned_start_ms,
+                planned_end_ms=plan.planned_end_ms,
+                overflow_ms=plan.overflow_ms,
+                borrowed_gap_after_ms=plan.borrowed_gap_after_ms,
+                overlap_next_ms=plan.overlap_next_ms,
+                status=plan.status,
             )
         )
     return manifests
@@ -118,6 +127,18 @@ def build_segment_manifests(
 
 def manifests_to_dicts(manifests: list[SegmentManifest]) -> list[dict]:
     return [asdict(item) for item in manifests]
+
+
+def build_manifest_summary(plans: list[TimingPlan]) -> dict:
+    return {
+        "cue_count": len(plans),
+        "ok_count": sum(1 for item in plans if item.status == "ok"),
+        "extended_count": sum(1 for item in plans if item.status == "extended_into_gap"),
+        "overflow_warning_count": sum(1 for item in plans if item.status == "overflow_warning"),
+        "severe_overflow_count": sum(1 for item in plans if item.status == "severe_overflow"),
+        "max_overflow_ms": max((item.overflow_ms for item in plans), default=0),
+        "total_borrowed_gap_ms": sum(item.borrowed_gap_after_ms for item in plans),
+    }
 
 
 def build_voiceover_track(
@@ -149,7 +170,7 @@ def build_voiceover_track(
     filter_parts: list[str] = []
     for idx, manifest in enumerate(manifests):
         label = f"a{idx}"
-        delay = manifest.cue_start_ms
+        delay = manifest.planned_start_ms
         filter_parts.append(
             f"[{idx + 1}:a]aresample={SAMPLE_RATE},aformat=channel_layouts=mono,"
             f"adelay={delay}|{delay}[{label}]"

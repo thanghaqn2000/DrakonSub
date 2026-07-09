@@ -8,11 +8,13 @@ services:
       DRAKONSUB_HOST: "0.0.0.0"
       DRAKONSUB_PORT: "8000"
       DRAKONSUB_JOBS_ROOT: "/app/data/jobs"
+      DRAKONSUB_VOICEOVER_JOBS_ROOT: "/app/data/voiceover-jobs"
       XDG_CACHE_HOME: "/app/data/whisper-cache"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./data/jobs:/app/data/jobs
+      - ./data/voiceover-jobs:/app/data/voiceover-jobs
       - ./data/whisper-cache:/app/data/whisper-cache
       - ./data/youtube-cookies.txt:/app/data/youtube-cookies.txt
     healthcheck:

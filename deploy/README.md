@@ -15,7 +15,7 @@ Default stack: **Docker Compose** + **Caddy** reverse proxy (HTTPS) + persistent
 cp .env.example .env
 # Edit .env — set OPENAI_API_KEY and/or GEMINI_API_KEY
 
-mkdir -p data/jobs data/whisper-cache
+mkdir -p data/jobs data/whisper-cache data/voiceover-jobs
 docker compose up -d --build drakonsub
 ```
 
@@ -64,6 +64,7 @@ Voiceover runbook: [docs/voiceover.md](../docs/voiceover.md).
 ## Storage & cleanup
 
 - `./data/jobs` — uploaded videos, URL imports, rendered outputs, subtitle edits
+- `./data/voiceover-jobs` — voiceover job artifacts (MP4, manifest, segments); map via `DRAKONSUB_VOICEOVER_JOBS_ROOT`
 - `./data/whisper-cache` — Whisper / HuggingFace model cache
 - `voiceover_jobs/` (or `DRAKONSUB_VOICEOVER_JOBS_ROOT`) — voiceover outputs; gitignored locally
 

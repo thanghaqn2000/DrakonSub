@@ -26,6 +26,9 @@ env/
 *.wav
 !tests/fixtures/**/*.srt
 
+# Voiceover probe output (Phase 0 local dev only)
+voiceover_probe_output/
+
 # Local debug & benchmark artifacts (keep scripts/benchmark_samples.json + docs)
 debug/
 artifacts/multi_sample_benchmark/

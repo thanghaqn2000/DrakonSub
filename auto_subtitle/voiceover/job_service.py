@@ -36,7 +36,7 @@ class VoiceoverJobOptions:
     voiceover_srt: Path
     output_video: Path
     workdir: Path
-    original_volume: float = 0.30
+    original_volume: float = 0.18
     voice_volume: float = 1.00
     prepare_text: bool = False
     voiceover_topic: str = "catholic"

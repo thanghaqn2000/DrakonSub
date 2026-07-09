@@ -55,6 +55,18 @@ from .voiceover.job_service import (
     VoiceoverJobOptions,
     run_voiceover_job,
 )
+from .voiceover.script_job import (
+    DEFAULT_ORIGINAL_VOLUME,
+    ScriptRenderOptions,
+    cues_to_response,
+    edited_voiceover_srt_path,
+    load_voiceover_cues,
+    render_script_job,
+    run_script_generation_job,
+    save_edited_voiceover_cues,
+    validate_edited_cues,
+    voiceover_srt_path,
+)
 
 load_env()
 
@@ -163,6 +175,7 @@ VOICEOVER_STAGE_PROGRESS = {
     "extracting_audio": 10,
     "transcribing": 25,
     "translating_voiceover": 45,
+    "script_ready": 50,
     "preparing_text": 15,
     "generating_voice": 35,
     "mixing_audio": 80,
@@ -207,6 +220,157 @@ def _voiceover_build_status_response(job_id: str, payload: Dict[str, Any]) -> Di
         "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
         "status_url": f"/api/voiceover/jobs/{job_id}",
     }
+
+
+def _voiceover_build_script_status_response(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _voiceover_normalize_status(payload)
+    status = payload.get("status", "processing")
+    output_path = Path(payload.get("output_video") or "")
+    manifest_path = Path(payload.get("manifest") or "")
+    output_ready = status == "completed" and output_path.is_file()
+    manifest_ready = status == "completed" and manifest_path.is_file()
+    voiceover_srt = voiceover_srt_path(_voiceover_job_dir(job_id))
+    edited_srt = edited_voiceover_srt_path(_voiceover_job_dir(job_id))
+    return {
+        "job_id": job_id,
+        "status": status,
+        "stage": payload.get("stage"),
+        "progress_percent": payload.get(
+            "progress_percent", VOICEOVER_STAGE_PROGRESS.get(payload.get("stage") or "", 0)
+        ),
+        "source_srt_ready": voiceover_srt.parent.joinpath("source.srt").is_file(),
+        "voiceover_srt_ready": voiceover_srt.is_file(),
+        "edited_srt_ready": bool(payload.get("edited_srt_ready")) or edited_srt.is_file(),
+        "cue_count": payload.get("cue_count"),
+        "summary": payload.get("summary"),
+        "error": payload.get("error"),
+        "output_ready": output_ready,
+        "manifest_ready": manifest_ready,
+        "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video" if output_ready else None,
+        "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
+        "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
+        "status_url": f"/api/voiceover/script-jobs/{job_id}",
+    }
+
+
+def _run_script_generation_background(
+    job_id: str,
+    input_video: Path,
+    job_dir: Path,
+    *,
+    voiceover_topic: str,
+) -> None:
+    def stage_callback(stage: str, percent: int) -> None:
+        _voiceover_update_job_json(
+            job_id,
+            {"status": "processing", "stage": stage, "progress_percent": percent},
+        )
+
+    try:
+        stage_callback("starting", 5)
+        source_srt, voiceover_srt = run_script_generation_job(
+            input_video,
+            job_dir,
+            voiceover_topic,
+            on_progress=stage_callback,
+        )
+        cue_count = len(load_srt(voiceover_srt))
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "script_ready",
+                "stage": "script_ready",
+                "progress_percent": 50,
+                "error": None,
+                "source_srt": str(source_srt),
+                "voiceover_srt": str(voiceover_srt),
+                "source_srt_ready": True,
+                "voiceover_srt_ready": True,
+                "edited_srt_ready": False,
+                "cue_count": cue_count,
+            },
+        )
+    except VoiceoverJobError as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+    except Exception as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+
+
+def _run_script_render_background(
+    job_id: str,
+    job_dir: Path,
+    options: ScriptRenderOptions,
+) -> None:
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+
+    def progress_callback(stage: str, percent: int) -> None:
+        mapped_stage, mapped_percent = VOICEOVER_TTS_STAGE_FROM_VIDEO.get(
+            stage, (stage, percent)
+        )
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "rendering",
+                "stage": mapped_stage,
+                "progress_percent": mapped_percent,
+            },
+        )
+
+    try:
+        _voiceover_update_job_json(
+            job_id,
+            {"status": "rendering", "stage": "starting", "progress_percent": 55},
+        )
+        result = render_script_job(job_dir, options, on_progress=progress_callback)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "progress_percent": 100,
+                "error": None,
+                "output_video": str(result.output_video),
+                "manifest": str(result.manifest_path),
+                "summary": result.summary,
+            },
+        )
+    except VoiceoverJobError as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+    except Exception as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
 
 
 def _run_voiceover_from_video_background(
@@ -1037,7 +1201,7 @@ async def create_voiceover_job(
     voiceover_srt: UploadFile = File(...),
     prepare_text: bool = Form(True),
     voiceover_topic: str = Form("catholic"),
-    original_volume: float = Form(0.30),
+    original_volume: float = Form(DEFAULT_ORIGINAL_VOLUME),
     voice_volume: float = Form(1.00),
     max_chars_per_second: float = Form(13.0),
     min_gap_ms: int = Form(120),
@@ -1114,7 +1278,7 @@ async def create_voiceover_job_from_video(
     input_video: UploadFile = File(...),
     prepare_text: bool = Form(True),
     voiceover_topic: str = Form("catholic"),
-    original_volume: float = Form(0.30),
+    original_volume: float = Form(DEFAULT_ORIGINAL_VOLUME),
     voice_volume: float = Form(1.00),
     max_chars_per_second: float = Form(13.0),
     min_gap_ms: int = Form(120),
@@ -1175,6 +1339,198 @@ async def create_voiceover_job_from_video(
         "status": "processing",
         "status_url": f"/api/voiceover/jobs/{job_id}",
         "message": "Đã bắt đầu tạo video thuyết minh.",
+    }
+
+
+@app.post("/api/voiceover/script-jobs/from-video")
+async def create_voiceover_script_job_from_video(
+    input_video: UploadFile = File(...),
+    voiceover_topic: str = Form("catholic"),
+    max_chars_per_second: float = Form(13.0),
+):
+    if not input_video.filename or Path(input_video.filename).suffix.lower() not in {
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".webm",
+    }:
+        raise HTTPException(400, "Unsupported input video format")
+
+    job_id = str(uuid.uuid4())
+    job_dir = VOICEOVER_JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    input_path = job_dir / "input.mp4"
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+    input_path.write_bytes(await input_video.read())
+
+    now = _voiceover_utc_now()
+    initial_payload = {
+        "job_id": job_id,
+        "job_type": "script",
+        "status": "processing",
+        "stage": "queued",
+        "progress_percent": 0,
+        "created_at": now,
+        "updated_at": now,
+        "error": None,
+        "input_video": str(input_path),
+        "voiceover_srt": None,
+        "output_video": str(output_path),
+        "manifest": str(manifest_path),
+        "summary": None,
+        "source_srt_ready": False,
+        "voiceover_srt_ready": False,
+        "edited_srt_ready": False,
+        "cue_count": None,
+        "max_chars_per_second": max_chars_per_second,
+        "voiceover_topic": voiceover_topic,
+    }
+    _write_voiceover_job_json(job_id, initial_payload)
+
+    threading.Thread(
+        target=_run_script_generation_background,
+        kwargs={
+            "job_id": job_id,
+            "input_video": input_path,
+            "job_dir": job_dir,
+            "voiceover_topic": voiceover_topic,
+        },
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "status_url": f"/api/voiceover/script-jobs/{job_id}",
+        "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
+        "message": "Đã bắt đầu tạo lời thuyết minh.",
+    }
+
+
+@app.get("/api/voiceover/script-jobs/{job_id}")
+def get_voiceover_script_job(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    return _voiceover_build_script_status_response(job_id, payload)
+
+
+@app.get("/api/voiceover/script-jobs/{job_id}/cues")
+def get_voiceover_script_job_cues(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    if payload.get("status") not in {"script_ready", "rendering", "completed"}:
+        raise HTTPException(409, "Lời thuyết minh chưa sẵn sàng để chỉnh sửa.")
+    job_dir = _voiceover_job_dir(job_id)
+    try:
+        cues, source = load_voiceover_cues(job_dir)
+    except VoiceoverJobError as exc:
+        raise HTTPException(409, _sanitize_voiceover_error(str(exc))) from exc
+    except SubtitleEditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return cues_to_response(job_id, cues, source)
+
+
+@app.put("/api/voiceover/script-jobs/{job_id}/cues")
+def save_voiceover_script_job_cues(job_id: str, body: dict = Body(...)):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    if payload.get("status") not in {"script_ready", "rendering", "completed"}:
+        raise HTTPException(409, "Lời thuyết minh chưa sẵn sàng để chỉnh sửa.")
+    if payload.get("status") == "rendering":
+        raise HTTPException(409, "Job đang render, không thể chỉnh sửa.")
+
+    job_dir = _voiceover_job_dir(job_id)
+    base_path = voiceover_srt_path(job_dir)
+    if not base_path.is_file():
+        raise HTTPException(409, "Chưa có file lời thuyết minh.")
+
+    try:
+        original_cues = load_srt(base_path)
+        submitted = body.get("cues")
+        if not isinstance(submitted, list):
+            raise SubtitleEditError("Dữ liệu cue không hợp lệ.")
+        updated = validate_edited_cues(original_cues, submitted)
+        save_edited_voiceover_cues(job_dir, updated)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "edited_srt_ready": True,
+                "cue_count": len(updated),
+            },
+        )
+    except SubtitleEditError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "job_id": job_id,
+        "edited_srt_ready": True,
+        "cue_count": len(updated),
+        "message": "Đã lưu lời thuyết minh đã chỉnh sửa.",
+    }
+
+
+@app.post("/api/voiceover/script-jobs/{job_id}/render")
+def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=dict)):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    if payload.get("status") not in {"script_ready", "failed"}:
+        raise HTTPException(409, "Job chưa sẵn sàng để render.")
+
+    job_dir = _voiceover_job_dir(job_id)
+    if not voiceover_srt_path(job_dir).is_file():
+        raise HTTPException(409, "Chưa có file lời thuyết minh.")
+
+    options = ScriptRenderOptions(
+        original_volume=float(body.get("original_volume", DEFAULT_ORIGINAL_VOLUME)),
+        voice_volume=float(body.get("voice_volume", 1.00)),
+        prepare_text=bool(body.get("prepare_text", True)),
+        voiceover_topic=str(
+            body.get("voiceover_topic", payload.get("voiceover_topic", "catholic"))
+        ),
+        max_chars_per_second=float(
+            body.get("max_chars_per_second", payload.get("max_chars_per_second", 13.0))
+        ),
+        min_gap_ms=int(body.get("min_gap_ms", 120)),
+        max_borrow_after_ms=int(body.get("max_borrow_after_ms", 1200)),
+        severe_overflow_ms=int(body.get("severe_overflow_ms", 2000)),
+    )
+
+    _voiceover_update_job_json(
+        job_id,
+        {
+            "status": "rendering",
+            "stage": "starting",
+            "progress_percent": 55,
+            "error": None,
+            "render_options": {
+                "original_volume": options.original_volume,
+                "voice_volume": options.voice_volume,
+                "prepare_text": options.prepare_text,
+            },
+        },
+    )
+
+    threading.Thread(
+        target=_run_script_render_background,
+        kwargs={"job_id": job_id, "job_dir": job_dir, "options": options},
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "rendering",
+        "status_url": f"/api/voiceover/script-jobs/{job_id}",
+        "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video",
+        "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest",
     }
 
 

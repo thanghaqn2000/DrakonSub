@@ -442,5 +442,190 @@ class VoiceoverWebTests(unittest.TestCase):
         self.assertIn("dịch", status["error"].lower())
 
 
+class VoiceoverScriptJobWebTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.voiceover_root = Path(self.tmp) / "voiceover_jobs"
+        self.voiceover_root_patcher = patch.object(web, "VOICEOVER_JOBS_ROOT", self.voiceover_root)
+        self.voiceover_root_patcher.start()
+        self.client = TestClient(web.app)
+
+    def tearDown(self) -> None:
+        self.voiceover_root_patcher.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_script_job(self, job_id: str, **extra) -> Path:
+        job_dir = self.voiceover_root / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "input.mp4").write_bytes(b"video")
+        payload = {
+            "job_id": job_id,
+            "job_type": "script",
+            "status": "script_ready",
+            "stage": "script_ready",
+            "progress_percent": 50,
+            "voiceover_topic": "catholic",
+            "max_chars_per_second": 13.0,
+        }
+        payload.update(extra)
+        web._write_voiceover_job_json(job_id, payload)
+        return job_dir
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_post_script_job_returns_quickly(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        res = self.client.post(
+            "/api/voiceover/script-jobs/from-video",
+            files={"input_video": ("clip.mp4", b"fake-video", "video/mp4")},
+            data={"voiceover_topic": "catholic"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "processing")
+        self.assertIn("/api/voiceover/script-jobs/", data["status_url"])
+        mock_thread.assert_called_once()
+
+    @patch.object(web, "run_voiceover_job")
+    @patch("auto_subtitle.web.run_script_generation_job")
+    def test_script_generation_does_not_call_tts(
+        self, mock_script_gen, mock_run_voiceover
+    ) -> None:
+        job_id = "script-gen"
+        job_dir = self._write_script_job(job_id, status="processing", stage="queued")
+        input_path = job_dir / "input.mp4"
+        source_srt = job_dir / "source.srt"
+        voiceover_srt = job_dir / "voiceover.srt"
+        source_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+        voiceover_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8")
+        mock_script_gen.return_value = (source_srt, voiceover_srt)
+
+        web._run_script_generation_background(
+            job_id, input_path, job_dir, voiceover_topic="catholic"
+        )
+
+        mock_run_voiceover.assert_not_called()
+        status = self.client.get(f"/api/voiceover/script-jobs/{job_id}").json()
+        self.assertEqual(status["status"], "script_ready")
+        self.assertTrue(status["voiceover_srt_ready"])
+
+    def test_get_cues_from_voiceover_srt(self) -> None:
+        job_id = "cues-base"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8"
+        )
+        res = self.client.get(f"/api/voiceover/script-jobs/{job_id}/cues")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["source"], "voiceover.srt")
+        self.assertEqual(len(data["cues"]), 1)
+        self.assertEqual(data["cues"][0]["text"], "Xin chao")
+
+    def test_get_cues_prefers_edited_srt(self) -> None:
+        job_id = "cues-edited"
+        job_dir = self._write_script_job(job_id, edited_srt_ready=True)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        (job_dir / "edited_voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nDa sua\n", encoding="utf-8"
+        )
+        data = self.client.get(f"/api/voiceover/script-jobs/{job_id}/cues").json()
+        self.assertEqual(data["source"], "edited_voiceover.srt")
+        self.assertEqual(data["cues"][0]["text"], "Da sua")
+
+    def test_put_cues_writes_edited_srt(self) -> None:
+        job_id = "save-cues"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.put(
+            f"/api/voiceover/script-jobs/{job_id}/cues",
+            json={
+                "cues": [
+                    {
+                        "index": 1,
+                        "start": "00:00:00,000",
+                        "end": "00:00:01,000",
+                        "text": "Da chinh sua",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue((job_dir / "edited_voiceover.srt").is_file())
+        self.assertIn("Da chinh sua", (job_dir / "edited_voiceover.srt").read_text(encoding="utf-8"))
+
+    def test_put_cues_rejects_timing_change(self) -> None:
+        job_id = "reject-timing"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.put(
+            f"/api/voiceover/script-jobs/{job_id}/cues",
+            json={
+                "cues": [
+                    {
+                        "index": 1,
+                        "start": "00:00:00,500",
+                        "end": "00:00:01,000",
+                        "text": "Goc",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(res.status_code, 400)
+
+    @patch("auto_subtitle.voiceover.script_job.run_voiceover_job")
+    def test_render_uses_edited_srt(self, mock_run_voiceover) -> None:
+        from auto_subtitle.voiceover.script_job import ScriptRenderOptions, render_script_job
+
+        job_id = "render-edited"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        edited = job_dir / "edited_voiceover.srt"
+        edited.write_text("1\n00:00:00,000 --> 00:00:01,000\nEdited\n", encoding="utf-8")
+        output_path = job_dir / "output_voiceover.mp4"
+        manifest_path = job_dir / "manifest.json"
+
+        def _complete(options, *, progress_callback=None):
+            self.assertEqual(options.voiceover_srt, edited)
+            self.assertEqual(options.original_volume, 0.18)
+            manifest_path.write_text("{}", encoding="utf-8")
+            output_path.write_bytes(b"video")
+            return VoiceoverJobResult(
+                output_video=output_path,
+                manifest_path=manifest_path,
+                prepared_srt_path=None,
+                cue_count=1,
+                segment_count=1,
+                summary={"cue_count": 1},
+                warnings=[],
+            )
+
+        mock_run_voiceover.side_effect = _complete
+        render_script_job(job_dir, ScriptRenderOptions(original_volume=0.18, voice_volume=1.0))
+        mock_run_voiceover.assert_called_once()
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_render_endpoint_default_volume(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        job_id = "render-api"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(f"/api/voiceover/script-jobs/{job_id}/render", json={})
+        self.assertEqual(res.status_code, 200)
+        mock_thread.assert_called_once()
+        thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
+        self.assertEqual(thread_kwargs["options"].original_volume, 0.18)
+        self.assertEqual(thread_kwargs["options"].voice_volume, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

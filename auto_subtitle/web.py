@@ -46,6 +46,10 @@ from .url_import_service import (
     validate_video_url,
 )
 from .utils import hex_color_to_ass
+from .voiceover.from_video import (
+    VOICEOVER_TTS_STAGE_FROM_VIDEO,
+    prepare_voiceover_srt_from_video,
+)
 from .voiceover.job_service import (
     VoiceoverJobError,
     VoiceoverJobOptions,
@@ -156,6 +160,9 @@ def _voiceover_utc_now() -> str:
 VOICEOVER_STAGE_PROGRESS = {
     "queued": 0,
     "starting": 5,
+    "extracting_audio": 10,
+    "transcribing": 25,
+    "translating_voiceover": 45,
     "preparing_text": 15,
     "generating_voice": 35,
     "mixing_audio": 80,
@@ -200,6 +207,105 @@ def _voiceover_build_status_response(job_id: str, payload: Dict[str, Any]) -> Di
         "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
         "status_url": f"/api/voiceover/jobs/{job_id}",
     }
+
+
+def _run_voiceover_from_video_background(
+    job_id: str,
+    input_video: Path,
+    job_dir: Path,
+    *,
+    prepare_text: bool,
+    voiceover_topic: str,
+    original_volume: float,
+    voice_volume: float,
+    max_chars_per_second: float,
+    min_gap_ms: int,
+    max_borrow_after_ms: int,
+    severe_overflow_ms: int,
+) -> None:
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+    prepared_srt_path = job_dir / "prepared_voiceover.srt"
+
+    def stage_callback(stage: str, percent: int) -> None:
+        _voiceover_update_job_json(
+            job_id,
+            {"status": "processing", "stage": stage, "progress_percent": percent},
+        )
+
+    def tts_progress_callback(stage: str, percent: int) -> None:
+        mapped_stage, mapped_percent = VOICEOVER_TTS_STAGE_FROM_VIDEO.get(
+            stage, (stage, percent)
+        )
+        stage_callback(mapped_stage, mapped_percent)
+
+    try:
+        stage_callback("starting", 5)
+        _, source_srt, voiceover_srt = prepare_voiceover_srt_from_video(
+            input_video,
+            job_dir,
+            voiceover_topic,
+            on_progress=stage_callback,
+        )
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "source_srt": str(source_srt),
+                "voiceover_srt": str(voiceover_srt),
+            },
+        )
+
+        options = VoiceoverJobOptions(
+            input_video=input_video,
+            voiceover_srt=voiceover_srt,
+            output_video=output_path,
+            workdir=job_dir,
+            original_volume=original_volume,
+            voice_volume=voice_volume,
+            prepare_text=prepare_text,
+            voiceover_topic=voiceover_topic,
+            max_chars_per_second=max_chars_per_second,
+            prepared_srt_output=prepared_srt_path if prepare_text else None,
+            min_gap_ms=min_gap_ms,
+            max_borrow_after_ms=max_borrow_after_ms,
+            severe_overflow_ms=severe_overflow_ms,
+            force=True,
+        )
+        result = run_voiceover_job(options, progress_callback=tts_progress_callback)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "progress_percent": 100,
+                "error": None,
+                "output_video": str(result.output_video),
+                "manifest": str(result.manifest_path),
+                "summary": result.summary,
+            },
+        )
+    except VoiceoverJobError as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
+    except Exception as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
 
 
 def _run_voiceover_job_background(job_id: str, options: VoiceoverJobOptions) -> None:
@@ -992,6 +1098,75 @@ async def create_voiceover_job(
     threading.Thread(
         target=_run_voiceover_job_background,
         args=(job_id, options),
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "status_url": f"/api/voiceover/jobs/{job_id}",
+        "message": "Đã bắt đầu tạo video thuyết minh.",
+    }
+
+
+@app.post("/api/voiceover/jobs/from-video")
+async def create_voiceover_job_from_video(
+    input_video: UploadFile = File(...),
+    prepare_text: bool = Form(True),
+    voiceover_topic: str = Form("catholic"),
+    original_volume: float = Form(0.30),
+    voice_volume: float = Form(1.00),
+    max_chars_per_second: float = Form(13.0),
+    min_gap_ms: int = Form(120),
+    max_borrow_after_ms: int = Form(1200),
+    severe_overflow_ms: int = Form(2000),
+):
+    if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+        raise HTTPException(400, "Unsupported input video format")
+
+    job_id = str(uuid.uuid4())
+    job_dir = VOICEOVER_JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    input_path = job_dir / "input.mp4"
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+
+    input_path.write_bytes(await input_video.read())
+
+    now = _voiceover_utc_now()
+    initial_payload = {
+        "job_id": job_id,
+        "status": "processing",
+        "stage": "queued",
+        "progress_percent": 0,
+        "created_at": now,
+        "updated_at": now,
+        "error": None,
+        "input_video": str(input_path),
+        "voiceover_srt": None,
+        "output_video": str(output_path),
+        "manifest": str(manifest_path),
+        "summary": None,
+        "source": "from-video",
+    }
+    _write_voiceover_job_json(job_id, initial_payload)
+
+    threading.Thread(
+        target=_run_voiceover_from_video_background,
+        kwargs={
+            "job_id": job_id,
+            "input_video": input_path,
+            "job_dir": job_dir,
+            "prepare_text": prepare_text,
+            "voiceover_topic": voiceover_topic,
+            "original_volume": original_volume,
+            "voice_volume": voice_volume,
+            "max_chars_per_second": max_chars_per_second,
+            "min_gap_ms": min_gap_ms,
+            "max_borrow_after_ms": max_borrow_after_ms,
+            "severe_overflow_ms": severe_overflow_ms,
+        },
         daemon=True,
     ).start()
 

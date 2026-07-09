@@ -952,17 +952,12 @@
     <div class="mode-panel" id="voiceover-panel">
       <section class="controls">
         <p class="voiceover-description">
-          Chức năng này tạo giọng đọc từ file SRT tiếng Việt rồi trộn vào video. Phù hợp video bài giảng, kể chuyện, thuyết minh.
+          Chức năng này tự nhận diện lời nói trong video, chuyển thành lời thuyết minh tiếng Việt, tạo giọng đọc rồi trộn vào video.
         </p>
 
         <div class="field">
           <label for="voiceover-video-input">Video nguồn</label>
           <input type="file" id="voiceover-video-input" accept="video/*" />
-        </div>
-
-        <div class="field">
-          <label for="voiceover-srt-input">File SRT lời đọc tiếng Việt</label>
-          <input type="file" id="voiceover-srt-input" accept=".srt,text/plain" />
         </div>
 
         <div class="field">
@@ -1146,7 +1141,6 @@
     const subtitleSourceLabel = document.getElementById("subtitle-source-label");
     const subtitleModalStatus = document.getElementById("subtitle-modal-status");
     const voiceoverVideoInput = document.getElementById("voiceover-video-input");
-    const voiceoverSrtInput = document.getElementById("voiceover-srt-input");
     const voiceoverPrepareText = document.getElementById("voiceover-prepare-text");
     const voiceoverTopic = document.getElementById("voiceover-topic");
     const voiceoverOriginalVolume = document.getElementById("voiceover-original-volume");
@@ -1200,7 +1194,6 @@
     let subtitleEditorOpen = false;
     let currentMode = "vietsub";
     let voiceoverSelectedVideo = null;
-    let voiceoverSelectedSrt = null;
     let voiceoverPollTimer = null;
     let voiceoverActiveJobId = null;
     let subtitleState = {
@@ -1244,7 +1237,7 @@
 
     function updateVoiceoverButtonState() {
       const processing = voiceoverActiveJobId !== null;
-      voiceoverGenerateBtn.disabled = processing || !(voiceoverSelectedVideo && voiceoverSelectedSrt);
+      voiceoverGenerateBtn.disabled = processing || !voiceoverSelectedVideo;
     }
 
     function voiceoverStageMessage(stage, status) {
@@ -1254,6 +1247,12 @@
         case "queued":
         case "starting":
           return "Đang chuẩn bị...";
+        case "extracting_audio":
+          return "Đang tách âm thanh từ video...";
+        case "transcribing":
+          return "Đang nhận diện lời nói...";
+        case "translating_voiceover":
+          return "Đang dịch lời thuyết minh...";
         case "preparing_text":
           return "Đang chuẩn hoá lời đọc...";
         case "generating_voice":
@@ -1368,7 +1367,6 @@
       const voiceVol = Number(voiceoverVoiceVolume.value);
       const cps = Number(voiceoverMaxCps.value);
       if (!voiceoverSelectedVideo) return "Vui lòng chọn video nguồn.";
-      if (!voiceoverSelectedSrt) return "Vui lòng chọn file SRT lời đọc tiếng Việt.";
       if (!Number.isFinite(originalVol) || originalVol < 0 || originalVol > 1) {
         return "Volume gốc phải nằm trong khoảng từ 0 đến 1.";
       }
@@ -1399,7 +1397,6 @@
 
       const form = new FormData();
       form.append("input_video", voiceoverSelectedVideo);
-      form.append("voiceover_srt", voiceoverSelectedSrt);
       form.append("prepare_text", voiceoverPrepareText.checked ? "true" : "false");
       form.append("voiceover_topic", voiceoverTopic.value);
       form.append("original_volume", voiceoverOriginalVolume.value);
@@ -1407,7 +1404,7 @@
       form.append("max_chars_per_second", voiceoverMaxCps.value);
 
       try {
-        const res = await fetch("/api/voiceover/jobs", { method: "POST", body: form });
+        const res = await fetch("/api/voiceover/jobs/from-video", { method: "POST", body: form });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Không tạo được video thuyết minh.");
 
@@ -1453,14 +1450,6 @@
       } else {
         voiceoverInputPreview.innerHTML = `<p class="placeholder">Chưa có video</p>`;
       }
-      clearVoiceoverError();
-      clearVoiceoverSuccess();
-      resetVoiceoverOutput();
-      updateVoiceoverButtonState();
-    });
-
-    voiceoverSrtInput.addEventListener("change", () => {
-      voiceoverSelectedSrt = voiceoverSrtInput.files[0] || null;
       clearVoiceoverError();
       clearVoiceoverSuccess();
       resetVoiceoverOutput();

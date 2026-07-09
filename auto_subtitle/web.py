@@ -5,6 +5,7 @@ import threading
 import traceback
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
@@ -148,6 +149,108 @@ def _sanitize_voiceover_error(message: str) -> str:
     return text or "Voiceover job failed"
 
 
+def _voiceover_utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+VOICEOVER_STAGE_PROGRESS = {
+    "queued": 0,
+    "starting": 5,
+    "preparing_text": 15,
+    "generating_voice": 35,
+    "mixing_audio": 80,
+    "completed": 100,
+    "failed": 100,
+}
+
+
+def _voiceover_update_job_json(job_id: str, updates: Dict[str, Any]) -> None:
+    payload = _read_voiceover_job_json(job_id) or {"job_id": job_id}
+    payload.update(updates)
+    payload["updated_at"] = _voiceover_utc_now()
+    _write_voiceover_job_json(job_id, payload)
+
+
+def _voiceover_normalize_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    status = payload.get("status", "processing")
+    output_path = Path(payload.get("output_video") or "")
+    manifest_path = Path(payload.get("manifest") or "")
+    if status == "processing" and output_path.is_file() and manifest_path.is_file():
+        payload = {**payload, "status": "completed", "stage": "completed", "progress_percent": 100}
+    return payload
+
+
+def _voiceover_build_status_response(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _voiceover_normalize_status(payload)
+    status = payload.get("status", "processing")
+    output_path = Path(payload.get("output_video") or "")
+    manifest_path = Path(payload.get("manifest") or "")
+    output_ready = status == "completed" and output_path.is_file()
+    manifest_ready = status == "completed" and manifest_path.is_file()
+    return {
+        "job_id": job_id,
+        "status": status,
+        "stage": payload.get("stage"),
+        "progress_percent": payload.get("progress_percent", VOICEOVER_STAGE_PROGRESS.get(payload.get("stage") or "", 0)),
+        "summary": payload.get("summary"),
+        "error": payload.get("error"),
+        "output_ready": output_ready,
+        "manifest_ready": manifest_ready,
+        "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video" if output_ready else None,
+        "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
+        "status_url": f"/api/voiceover/jobs/{job_id}",
+    }
+
+
+def _run_voiceover_job_background(job_id: str, options: VoiceoverJobOptions) -> None:
+    def progress_callback(stage: str, percent: int) -> None:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "processing",
+                "stage": stage,
+                "progress_percent": percent,
+            },
+        )
+
+    try:
+        result = run_voiceover_job(options, progress_callback=progress_callback)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "progress_percent": 100,
+                "error": None,
+                "output_video": str(result.output_video),
+                "manifest": str(result.manifest_path),
+                "summary": result.summary,
+            },
+        )
+    except VoiceoverJobError as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
+    except Exception as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
+
+
 def _write_voiceover_job_json(job_id: str, payload: Dict[str, Any]) -> None:
     job_dir = _voiceover_job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +285,8 @@ def _voiceover_fallback_payload(job_id: str) -> Optional[Dict[str, Any]]:
     return {
         "job_id": job_id,
         "status": "completed" if output_path.is_file() else "processing",
+        "stage": "completed" if output_path.is_file() else "processing",
+        "progress_percent": 100 if output_path.is_file() else 0,
         "created_at": None,
         "updated_at": None,
         "error": None,
@@ -851,101 +956,71 @@ async def create_voiceover_job(
     input_path.write_bytes(await input_video.read())
     srt_path.write_bytes(await voiceover_srt.read())
 
+    now = _voiceover_utc_now()
     initial_payload = {
         "job_id": job_id,
         "status": "processing",
-        "created_at": uuid.uuid1().time,
-        "updated_at": uuid.uuid1().time,
+        "stage": "queued",
+        "progress_percent": 0,
+        "created_at": now,
+        "updated_at": now,
         "error": None,
         "input_video": str(input_path),
         "voiceover_srt": str(srt_path),
         "output_video": str(output_path),
         "manifest": str(manifest_path),
+        "summary": None,
     }
     _write_voiceover_job_json(job_id, initial_payload)
 
-    try:
-        result = run_voiceover_job(
-            VoiceoverJobOptions(
-                input_video=input_path,
-                voiceover_srt=srt_path,
-                output_video=output_path,
-                workdir=job_dir,
-                original_volume=original_volume,
-                voice_volume=voice_volume,
-                prepare_text=prepare_text,
-                voiceover_topic=voiceover_topic,
-                max_chars_per_second=max_chars_per_second,
-                prepared_srt_output=prepared_srt_path if prepare_text else None,
-                min_gap_ms=min_gap_ms,
-                max_borrow_after_ms=max_borrow_after_ms,
-                severe_overflow_ms=severe_overflow_ms,
-                force=True,
-            )
-        )
-        payload = {
-            "job_id": job_id,
-            "status": "completed",
-            "created_at": initial_payload["created_at"],
-            "updated_at": uuid.uuid1().time,
-            "error": None,
-            "input_video": str(input_path),
-            "voiceover_srt": str(srt_path),
-            "output_video": str(result.output_video),
-            "manifest": str(result.manifest_path),
-            "summary": result.summary,
-        }
-        _write_voiceover_job_json(job_id, payload)
-        return {
-            "job_id": job_id,
-            "status": "completed",
-            "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video",
-            "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest",
-            "summary": result.summary,
-        }
-    except VoiceoverJobError as exc:
-        payload = {
-            "job_id": job_id,
-            "status": "failed",
-            "created_at": initial_payload["created_at"],
-            "updated_at": uuid.uuid1().time,
-            "error": _sanitize_voiceover_error(str(exc)),
-            "input_video": str(input_path),
-            "voiceover_srt": str(srt_path),
-            "output_video": str(output_path),
-            "manifest": str(manifest_path),
-            "summary": None,
-        }
-        _write_voiceover_job_json(job_id, payload)
-        return {
-            "job_id": job_id,
-            "status": "failed",
-            "error": payload["error"],
-        }
+    options = VoiceoverJobOptions(
+        input_video=input_path,
+        voiceover_srt=srt_path,
+        output_video=output_path,
+        workdir=job_dir,
+        original_volume=original_volume,
+        voice_volume=voice_volume,
+        prepare_text=prepare_text,
+        voiceover_topic=voiceover_topic,
+        max_chars_per_second=max_chars_per_second,
+        prepared_srt_output=prepared_srt_path if prepare_text else None,
+        min_gap_ms=min_gap_ms,
+        max_borrow_after_ms=max_borrow_after_ms,
+        severe_overflow_ms=severe_overflow_ms,
+        force=True,
+    )
+    threading.Thread(
+        target=_run_voiceover_job_background,
+        args=(job_id, options),
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "status_url": f"/api/voiceover/jobs/{job_id}",
+        "message": "Đã bắt đầu tạo video thuyết minh.",
+    }
 
 
 @app.get("/api/voiceover/jobs/{job_id}")
 def get_voiceover_job(job_id: str):
+    _voiceover_validate_job_id(job_id)
     payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
     if not payload:
         raise HTTPException(404, "Voiceover job not found")
-    manifest_ready = Path(payload.get("manifest") or "").is_file()
-    output_ready = Path(payload.get("output_video") or "").is_file()
-    return {
-        "job_id": payload["job_id"],
-        "status": payload["status"],
-        "summary": payload.get("summary"),
-        "error": payload.get("error"),
-        "output_ready": output_ready,
-        "manifest_ready": manifest_ready,
-    }
+    return _voiceover_build_status_response(job_id, payload)
 
 
 @app.get("/api/voiceover/jobs/{job_id}/manifest")
 def get_voiceover_manifest(job_id: str):
+    _voiceover_validate_job_id(job_id)
     payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
     if not payload:
         raise HTTPException(404, "Voiceover job not found")
+    status = _voiceover_build_status_response(job_id, payload)
+    if not status["manifest_ready"]:
+        raise HTTPException(409, "Manifest chưa sẵn sàng. Vui lòng đợi job hoàn tất.")
     manifest_path = Path(payload.get("manifest") or "")
     if not manifest_path.is_file():
         raise HTTPException(404, "Manifest not found")
@@ -954,9 +1029,13 @@ def get_voiceover_manifest(job_id: str):
 
 @app.get("/api/voiceover/jobs/{job_id}/output-video")
 def get_voiceover_output_video(job_id: str):
+    _voiceover_validate_job_id(job_id)
     payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
     if not payload:
         raise HTTPException(404, "Voiceover job not found")
+    status = _voiceover_build_status_response(job_id, payload)
+    if not status["output_ready"]:
+        raise HTTPException(409, "Video thuyết minh chưa sẵn sàng. Vui lòng đợi job hoàn tất.")
     output_path = Path(payload.get("output_video") or "")
     if not output_path.is_file():
         raise HTTPException(404, "Output video not found")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,7 +67,15 @@ def _segment_filename(index: int) -> str:
     return f"{index:04d}.wav"
 
 
-def run_voiceover_job(options: VoiceoverJobOptions) -> VoiceoverJobResult:
+def run_voiceover_job(
+    options: VoiceoverJobOptions,
+    *,
+    progress_callback: Callable[[str, int], None] | None = None,
+) -> VoiceoverJobResult:
+    def _report(stage: str, percent: int) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, percent)
+
     input_video = Path(options.input_video)
     voiceover_srt = Path(options.voiceover_srt)
     output_video = Path(options.output_video)
@@ -88,6 +97,8 @@ def run_voiceover_job(options: VoiceoverJobOptions) -> VoiceoverJobResult:
     if not cues:
         raise VoiceoverJobError(f"No cues found in {voiceover_srt}")
 
+    _report("starting", 5)
+
     prepared_cues = None
     tts_cues = cues
     prepared_srt_path = None
@@ -101,6 +112,7 @@ def run_voiceover_job(options: VoiceoverJobOptions) -> VoiceoverJobResult:
     }
 
     if options.prepare_text:
+        _report("preparing_text", 15)
         prepared_cues = prepare_voiceover_cues(
             cues,
             topic=options.voiceover_topic,
@@ -120,6 +132,8 @@ def run_voiceover_job(options: VoiceoverJobOptions) -> VoiceoverJobResult:
 
         segments_dir = workdir / "segments"
         segments_dir.mkdir(parents=True, exist_ok=True)
+
+        _report("generating_voice", 35)
 
         segment_paths: list[Path] = []
         tts_durations_ms: list[int] = []
@@ -147,6 +161,8 @@ def run_voiceover_job(options: VoiceoverJobOptions) -> VoiceoverJobResult:
         )
         summary = build_manifest_summary(timing_plans)
         summary.update(text_summary)
+
+        _report("mixing_audio", 80)
 
         voiceover_track = workdir / "voiceover_track.wav"
         build_voiceover_track(

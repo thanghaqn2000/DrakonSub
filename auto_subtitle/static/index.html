@@ -1201,6 +1201,8 @@
     let currentMode = "vietsub";
     let voiceoverSelectedVideo = null;
     let voiceoverSelectedSrt = null;
+    let voiceoverPollTimer = null;
+    let voiceoverActiveJobId = null;
     let subtitleState = {
       loaded: [],
       draft: [],
@@ -1241,7 +1243,102 @@
     }
 
     function updateVoiceoverButtonState() {
-      voiceoverGenerateBtn.disabled = !(voiceoverSelectedVideo && voiceoverSelectedSrt);
+      const processing = voiceoverActiveJobId !== null;
+      voiceoverGenerateBtn.disabled = processing || !(voiceoverSelectedVideo && voiceoverSelectedSrt);
+    }
+
+    function voiceoverStageMessage(stage, status) {
+      if (status === "completed") return "Đã tạo video thuyết minh thành công.";
+      if (status === "failed") return "Không tạo được video thuyết minh.";
+      switch (stage) {
+        case "queued":
+        case "starting":
+          return "Đang chuẩn bị...";
+        case "preparing_text":
+          return "Đang chuẩn hoá lời đọc...";
+        case "generating_voice":
+          return "Đang tạo giọng thuyết minh...";
+        case "mixing_audio":
+          return "Đang trộn giọng với video...";
+        default:
+          return "Đã bắt đầu tạo video thuyết minh...";
+      }
+    }
+
+    function applyVoiceoverCompleted(data) {
+      voiceoverProgressFill.style.width = "100%";
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+      showVoiceoverSuccess("Đã tạo video thuyết minh thành công.");
+      if (data.output_video_url) {
+        const previewUrl = `${data.output_video_url}?t=${Date.now()}`;
+        setSimpleVideoPreview(voiceoverOutputPreview, previewUrl);
+        voiceoverDownloadBtn.hidden = false;
+        voiceoverDownloadBtn.disabled = false;
+        voiceoverDownloadBtn.onclick = () => { window.location.href = data.output_video_url; };
+      }
+      if (data.manifest_url) {
+        voiceoverManifestBtn.hidden = false;
+        voiceoverManifestBtn.disabled = false;
+        voiceoverManifestBtn.onclick = () => { window.location.href = data.manifest_url; };
+      }
+      if (data.summary) {
+        voiceoverSummary.classList.remove("hidden");
+        voiceoverSummaryCues.textContent = data.summary.cue_count ?? 0;
+        voiceoverSummarySevere.textContent = data.summary.severe_overflow_count ?? 0;
+        voiceoverSummaryShortened.textContent = data.summary.text_shortened_count ?? 0;
+        voiceoverSummaryTooLong.textContent = data.summary.text_too_long_count ?? 0;
+      }
+    }
+
+    function applyVoiceoverFailed(data) {
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+      showVoiceoverError(data.error || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
+    }
+
+    function stopVoiceoverPolling() {
+      if (voiceoverPollTimer) {
+        clearInterval(voiceoverPollTimer);
+        voiceoverPollTimer = null;
+      }
+      voiceoverActiveJobId = null;
+      updateVoiceoverButtonState();
+    }
+
+    async function pollVoiceoverJob(jobId) {
+      const res = await fetch(`/api/voiceover/jobs/${jobId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không lấy được trạng thái job thuyết minh.");
+
+      const percent = Number.isFinite(data.progress_percent) ? data.progress_percent : 0;
+      voiceoverProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+
+      if (data.status === "completed") {
+        stopVoiceoverPolling();
+        applyVoiceoverCompleted(data);
+        return;
+      }
+      if (data.status === "failed") {
+        stopVoiceoverPolling();
+        applyVoiceoverFailed(data);
+      }
+    }
+
+    function beginVoiceoverPolling(jobId) {
+      voiceoverActiveJobId = jobId;
+      updateVoiceoverButtonState();
+      if (voiceoverPollTimer) clearInterval(voiceoverPollTimer);
+      voiceoverPollTimer = setInterval(() => {
+        pollVoiceoverJob(jobId).catch((err) => {
+          stopVoiceoverPolling();
+          showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
+        });
+      }, 2000);
+      pollVoiceoverJob(jobId).catch((err) => {
+        stopVoiceoverPolling();
+        showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
+      });
     }
 
     function setSimpleVideoPreview(container, fileOrUrl) {
@@ -1294,10 +1391,11 @@
       clearVoiceoverError();
       clearVoiceoverSuccess();
       resetVoiceoverOutput();
+      stopVoiceoverPolling();
       voiceoverGenerateBtn.disabled = true;
       voiceoverProgressWrap.classList.add("visible");
-      voiceoverProgressFill.style.width = "25%";
-      voiceoverProgressText.textContent = "Đang tạo giọng thuyết minh...";
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = "Đã bắt đầu tạo video thuyết minh...";
 
       const form = new FormData();
       form.append("input_video", voiceoverSelectedVideo);
@@ -1317,35 +1415,21 @@
           throw new Error(data.error || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
         }
 
-        voiceoverProgressFill.style.width = "100%";
-        voiceoverProgressText.textContent = "Đã tạo video thuyết minh thành công.";
-        showVoiceoverSuccess("Đã tạo video thuyết minh thành công.");
+        if (data.status === "processing" && data.job_id) {
+          beginVoiceoverPolling(data.job_id);
+          return;
+        }
 
-        if (data.output_video_url) {
-          const previewUrl = `${data.output_video_url}?t=${Date.now()}`;
-          setSimpleVideoPreview(voiceoverOutputPreview, previewUrl);
-          voiceoverDownloadBtn.hidden = false;
-          voiceoverDownloadBtn.disabled = false;
-          voiceoverDownloadBtn.onclick = () => { window.location.href = data.output_video_url; };
-        }
-        if (data.manifest_url) {
-          voiceoverManifestBtn.hidden = false;
-          voiceoverManifestBtn.disabled = false;
-          voiceoverManifestBtn.onclick = () => { window.location.href = data.manifest_url; };
-        }
-        if (data.summary) {
-          voiceoverSummary.classList.remove("hidden");
-          voiceoverSummaryCues.textContent = data.summary.cue_count ?? 0;
-          voiceoverSummarySevere.textContent = data.summary.severe_overflow_count ?? 0;
-          voiceoverSummaryShortened.textContent = data.summary.text_shortened_count ?? 0;
-          voiceoverSummaryTooLong.textContent = data.summary.text_too_long_count ?? 0;
+        if (data.status === "completed") {
+          applyVoiceoverCompleted(data);
+          stopVoiceoverPolling();
+          return;
         }
       } catch (err) {
+        stopVoiceoverPolling();
         voiceoverProgressFill.style.width = "0%";
         voiceoverProgressText.textContent = "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.";
         showVoiceoverError(err.message || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
-      } finally {
-        updateVoiceoverButtonState();
       }
     }
 

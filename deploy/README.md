@@ -56,11 +56,16 @@ See `.env.example`. Production-critical:
 | `DRAKONSUB_JOBS_ROOT` | Job uploads/outputs path inside container |
 | `DRAKONSUB_DOMAIN` | Public hostname for Caddy |
 | `YT_DLP_COOKIES_FILE` | YouTube cookies (Netscape format) for cloud-server imports |
+| `SAYDI_TTS_API_TOKEN` | Saydi TTS for voiceover tab (backend only) |
+| `DRAKONSUB_VOICEOVER_JOBS_ROOT` | Voiceover job artifacts path |
+
+Voiceover runbook: [docs/voiceover.md](../docs/voiceover.md).
 
 ## Storage & cleanup
 
 - `./data/jobs` — uploaded videos, URL imports, rendered outputs, subtitle edits
 - `./data/whisper-cache` — Whisper / HuggingFace model cache
+- `voiceover_jobs/` (or `DRAKONSUB_VOICEOVER_JOBS_ROOT`) — voiceover outputs; gitignored locally
 
 Job folders are **not** served by Caddy. Back up or prune `data/jobs` on a schedule; generated media can be large.
 

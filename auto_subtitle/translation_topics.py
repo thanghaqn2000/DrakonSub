@@ -33,6 +33,29 @@ _ECONOMICS_GLOSSARY = """Terminology guide (economics / investing / crypto — u
 - ETF → ETF
 - halving → halving (or "sự kiện giảm một nửa phần thưởng đào Bitcoin" when context needs a brief explanation)"""
 
+_CATHOLIC_GLOSSARY = """Terminology guide (Catholic / preaching / narration — keep it reverent, natural, and accessible):
+- God → Thiên Chúa / Chúa (tùy ngữ cảnh)
+- Jesus Christ → Chúa Giêsu Kitô
+- Jesus → Chúa Giêsu
+- Holy Spirit → Chúa Thánh Thần
+- Gospel → Tin Mừng
+- Scripture → Kinh Thánh
+- faith → đức tin
+- grace → ân sủng
+- salvation → ơn cứu độ
+- sin → tội lỗi
+- repentance → sám hối / hoán cải
+- disciple → môn đệ
+- apostle → tông đồ
+- saint → thánh
+- blessed → chân phước
+- priest → linh mục
+- bishop → giám mục
+- cardinal → hồng y
+- Mass → Thánh lễ
+- homily → bài giảng
+- prayer → lời cầu nguyện"""
+
 
 @dataclass(frozen=True)
 class TranslationTopic:
@@ -74,6 +97,18 @@ TOPICS: Dict[str, TranslationTopic] = {
             "- Preserve humor and timing when possible; mild colloquial flair is welcome.\n"
             "- Do not invent jokes or exaggerate — stay faithful to the original energy."
         ),
+    ),
+    "catholic": TranslationTopic(
+        id="catholic",
+        label="Công giáo trang nghiêm",
+        guidance=(
+            "Catholic preaching, Scripture reflection, or narration.\n"
+            "- Use natural, reverent Vietnamese that ordinary parishioners can follow.\n"
+            "- Avoid stiff machine-translation phrasing or overly academic wording.\n"
+            "- Keep the Catholic spirit and theological meaning intact.\n"
+            "- Prefer mộc mạc, sâu sắc, and spoken phrasing suited for bài giảng or thuyết minh."
+        ),
+        glossary=_CATHOLIC_GLOSSARY,
     ),
 }
 
@@ -121,7 +156,7 @@ def build_polish_system_prompt(topic: Optional[str] = None) -> str:
     if topic_def.glossary:
         extra = (
             f"\n\nContext: {topic_def.label} content. "
-            "Keep terminology consistent with standard Vietnamese finance/crypto usage."
+            f"Keep terminology consistent with {topic_def.label.lower()} usage."
         )
     return POLISH_SYSTEM_PROMPT + extra
 

@@ -77,6 +77,33 @@
       padding: 2rem 1.5rem 3rem;
     }
 
+    .mode-tabs {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .mode-tab {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .mode-tab.active {
+      background: rgba(147, 51, 234, 0.15);
+      border-color: var(--purple);
+      color: #d8b4fe;
+    }
+
+    .mode-panel {
+      display: none;
+    }
+
+    .mode-panel.active {
+      display: block;
+    }
+
     .controls {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -387,6 +414,50 @@
 
     .error.visible { display: block; }
 
+    .success-box {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.35);
+      border-radius: 8px;
+      color: #86efac;
+      display: none;
+    }
+
+    .success-box.visible { display: block; }
+
+    .voiceover-description {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+      margin-bottom: 1rem;
+    }
+
+    .voiceover-summary {
+      margin-top: 1rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .voiceover-summary-card {
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .voiceover-summary-card strong {
+      display: block;
+      font-size: 1rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .voiceover-summary-card span {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
     .previews {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -694,6 +765,12 @@
   </header>
 
   <main>
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="mode-vietsub-tab" type="button">Vietsub</button>
+      <button class="mode-tab" id="mode-voiceover-tab" type="button">Thuyết minh</button>
+    </div>
+
+    <div class="mode-panel active" id="vietsub-panel">
     <section class="controls">
       <div class="upload-zone" id="upload-zone">
         <strong>Chọn hoặc kéo thả video</strong>
@@ -870,6 +947,111 @@
       </div>
       <p class="field-hint">Xem trước overlay trên video gốc — chỉ là text mẫu, không sửa nội dung sub thật.</p>
     </div>
+    </div>
+
+    <div class="mode-panel" id="voiceover-panel">
+      <section class="controls">
+        <p class="voiceover-description">
+          Chức năng này tạo giọng đọc từ file SRT tiếng Việt rồi trộn vào video. Phù hợp video bài giảng, kể chuyện, thuyết minh.
+        </p>
+
+        <div class="field">
+          <label for="voiceover-video-input">Video nguồn</label>
+          <input type="file" id="voiceover-video-input" accept="video/*" />
+        </div>
+
+        <div class="field">
+          <label for="voiceover-srt-input">File SRT lời đọc tiếng Việt</label>
+          <input type="file" id="voiceover-srt-input" accept=".srt,text/plain" />
+        </div>
+
+        <div class="field">
+          <label class="toggle-row" for="voiceover-prepare-text">
+            <input type="checkbox" id="voiceover-prepare-text" checked />
+            <span>Chuẩn hoá lời đọc trước khi tạo giọng</span>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <div class="field" style="margin-top:0">
+            <label for="voiceover-topic">Chủ đề</label>
+            <select id="voiceover-topic">
+              <option value="catholic">Công giáo</option>
+            </select>
+          </div>
+          <div class="field" style="margin-top:0">
+            <label for="voiceover-max-cps">Max chars / giây</label>
+            <input type="number" id="voiceover-max-cps" min="8" max="20" step="1" value="13" />
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field" style="margin-top:0">
+            <label for="voiceover-original-volume">Volume gốc</label>
+            <input type="number" id="voiceover-original-volume" min="0" max="1" step="0.05" value="0.30" />
+          </div>
+          <div class="field" style="margin-top:0">
+            <label for="voiceover-voice-volume">Volume thuyết minh</label>
+            <input type="number" id="voiceover-voice-volume" min="0" max="2" step="0.05" value="1.00" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <div class="actions-primary">
+            <button class="btn-primary" id="voiceover-generate-btn" disabled>Tạo video thuyết minh</button>
+          </div>
+          <div class="actions-secondary">
+            <button class="btn-secondary" id="voiceover-download-btn" disabled hidden>Tải video thuyết minh</button>
+            <button class="btn-secondary" id="voiceover-manifest-btn" disabled hidden>Tải manifest</button>
+          </div>
+        </div>
+
+        <div class="progress-wrap" id="voiceover-progress-wrap">
+          <div class="progress-bar">
+            <div class="progress-fill" id="voiceover-progress-fill"></div>
+          </div>
+          <p class="progress-text" id="voiceover-progress-text">Đang chờ...</p>
+        </div>
+
+        <p class="error" id="voiceover-error-box"></p>
+        <p class="success-box" id="voiceover-success-box"></p>
+
+        <div class="voiceover-summary hidden" id="voiceover-summary">
+          <div class="voiceover-summary-card">
+            <strong id="voiceover-summary-cues">0</strong>
+            <span>Tổng cue</span>
+          </div>
+          <div class="voiceover-summary-card">
+            <strong id="voiceover-summary-severe">0</strong>
+            <span>Severe overflow</span>
+          </div>
+          <div class="voiceover-summary-card">
+            <strong id="voiceover-summary-shortened">0</strong>
+            <span>Cue đã rút gọn</span>
+          </div>
+          <div class="voiceover-summary-card">
+            <strong id="voiceover-summary-too-long">0</strong>
+            <span>Cue vẫn còn dài</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="previews">
+        <div class="preview-card">
+          <h2>Xem trước — Video nguồn thuyết minh</h2>
+          <div class="preview-body" id="voiceover-input-preview">
+            <p class="placeholder">Chưa có video</p>
+          </div>
+        </div>
+
+        <div class="preview-card">
+          <h2>Xem trước — Video thuyết minh</h2>
+          <div class="preview-body" id="voiceover-output-preview">
+            <p class="placeholder">Video thuyết minh sau khi tạo sẽ hiện ở đây</p>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <div class="subtitle-modal" id="subtitle-modal">
       <div class="subtitle-modal-card">
@@ -920,6 +1102,10 @@
       system_default: '400',
     };
 
+    const modeVietsubTab = document.getElementById("mode-vietsub-tab");
+    const modeVoiceoverTab = document.getElementById("mode-voiceover-tab");
+    const vietsubPanel = document.getElementById("vietsub-panel");
+    const voiceoverPanel = document.getElementById("voiceover-panel");
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
     const videoUrlInput = document.getElementById("video-url-input");
@@ -959,6 +1145,28 @@
     const subtitleEditedCount = document.getElementById("subtitle-edited-count");
     const subtitleSourceLabel = document.getElementById("subtitle-source-label");
     const subtitleModalStatus = document.getElementById("subtitle-modal-status");
+    const voiceoverVideoInput = document.getElementById("voiceover-video-input");
+    const voiceoverSrtInput = document.getElementById("voiceover-srt-input");
+    const voiceoverPrepareText = document.getElementById("voiceover-prepare-text");
+    const voiceoverTopic = document.getElementById("voiceover-topic");
+    const voiceoverOriginalVolume = document.getElementById("voiceover-original-volume");
+    const voiceoverVoiceVolume = document.getElementById("voiceover-voice-volume");
+    const voiceoverMaxCps = document.getElementById("voiceover-max-cps");
+    const voiceoverGenerateBtn = document.getElementById("voiceover-generate-btn");
+    const voiceoverDownloadBtn = document.getElementById("voiceover-download-btn");
+    const voiceoverManifestBtn = document.getElementById("voiceover-manifest-btn");
+    const voiceoverProgressWrap = document.getElementById("voiceover-progress-wrap");
+    const voiceoverProgressFill = document.getElementById("voiceover-progress-fill");
+    const voiceoverProgressText = document.getElementById("voiceover-progress-text");
+    const voiceoverErrorBox = document.getElementById("voiceover-error-box");
+    const voiceoverSuccessBox = document.getElementById("voiceover-success-box");
+    const voiceoverSummary = document.getElementById("voiceover-summary");
+    const voiceoverSummaryCues = document.getElementById("voiceover-summary-cues");
+    const voiceoverSummarySevere = document.getElementById("voiceover-summary-severe");
+    const voiceoverSummaryShortened = document.getElementById("voiceover-summary-shortened");
+    const voiceoverSummaryTooLong = document.getElementById("voiceover-summary-too-long");
+    const voiceoverInputPreview = document.getElementById("voiceover-input-preview");
+    const voiceoverOutputPreview = document.getElementById("voiceover-output-preview");
 
     const layoutControls = {
       x: document.getElementById("layout-x"),
@@ -990,6 +1198,11 @@
     let currentLayout = null;
     let layoutOverlayEl = null;
     let subtitleEditorOpen = false;
+    let currentMode = "vietsub";
+    let voiceoverSelectedVideo = null;
+    let voiceoverSelectedSrt = null;
+    let voiceoverPollTimer = null;
+    let voiceoverActiveJobId = null;
     let subtitleState = {
       loaded: [],
       draft: [],
@@ -1000,6 +1213,226 @@
       activeCueIndex: null,
     };
 
+    function setMode(mode) {
+      currentMode = mode;
+      const isVietsub = mode === "vietsub";
+      modeVietsubTab.classList.toggle("active", isVietsub);
+      modeVoiceoverTab.classList.toggle("active", !isVietsub);
+      vietsubPanel.classList.toggle("active", isVietsub);
+      voiceoverPanel.classList.toggle("active", !isVietsub);
+    }
+
+    function showVoiceoverError(msg) {
+      voiceoverErrorBox.textContent = msg;
+      voiceoverErrorBox.classList.add("visible");
+    }
+
+    function clearVoiceoverError() {
+      voiceoverErrorBox.classList.remove("visible");
+      voiceoverErrorBox.textContent = "";
+    }
+
+    function showVoiceoverSuccess(msg) {
+      voiceoverSuccessBox.textContent = msg;
+      voiceoverSuccessBox.classList.add("visible");
+    }
+
+    function clearVoiceoverSuccess() {
+      voiceoverSuccessBox.classList.remove("visible");
+      voiceoverSuccessBox.textContent = "";
+    }
+
+    function updateVoiceoverButtonState() {
+      const processing = voiceoverActiveJobId !== null;
+      voiceoverGenerateBtn.disabled = processing || !(voiceoverSelectedVideo && voiceoverSelectedSrt);
+    }
+
+    function voiceoverStageMessage(stage, status) {
+      if (status === "completed") return "Đã tạo video thuyết minh thành công.";
+      if (status === "failed") return "Không tạo được video thuyết minh.";
+      switch (stage) {
+        case "queued":
+        case "starting":
+          return "Đang chuẩn bị...";
+        case "preparing_text":
+          return "Đang chuẩn hoá lời đọc...";
+        case "generating_voice":
+          return "Đang tạo giọng thuyết minh...";
+        case "mixing_audio":
+          return "Đang trộn giọng với video...";
+        default:
+          return "Đã bắt đầu tạo video thuyết minh...";
+      }
+    }
+
+    function applyVoiceoverCompleted(data) {
+      voiceoverProgressFill.style.width = "100%";
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+      showVoiceoverSuccess("Đã tạo video thuyết minh thành công.");
+      if (data.output_video_url) {
+        const previewUrl = `${data.output_video_url}?t=${Date.now()}`;
+        setSimpleVideoPreview(voiceoverOutputPreview, previewUrl);
+        voiceoverDownloadBtn.hidden = false;
+        voiceoverDownloadBtn.disabled = false;
+        voiceoverDownloadBtn.onclick = () => { window.location.href = data.output_video_url; };
+      }
+      if (data.manifest_url) {
+        voiceoverManifestBtn.hidden = false;
+        voiceoverManifestBtn.disabled = false;
+        voiceoverManifestBtn.onclick = () => { window.location.href = data.manifest_url; };
+      }
+      if (data.summary) {
+        voiceoverSummary.classList.remove("hidden");
+        voiceoverSummaryCues.textContent = data.summary.cue_count ?? 0;
+        voiceoverSummarySevere.textContent = data.summary.severe_overflow_count ?? 0;
+        voiceoverSummaryShortened.textContent = data.summary.text_shortened_count ?? 0;
+        voiceoverSummaryTooLong.textContent = data.summary.text_too_long_count ?? 0;
+      }
+    }
+
+    function applyVoiceoverFailed(data) {
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+      showVoiceoverError(data.error || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
+    }
+
+    function stopVoiceoverPolling() {
+      if (voiceoverPollTimer) {
+        clearInterval(voiceoverPollTimer);
+        voiceoverPollTimer = null;
+      }
+      voiceoverActiveJobId = null;
+      updateVoiceoverButtonState();
+    }
+
+    async function pollVoiceoverJob(jobId) {
+      const res = await fetch(`/api/voiceover/jobs/${jobId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không lấy được trạng thái job thuyết minh.");
+
+      const percent = Number.isFinite(data.progress_percent) ? data.progress_percent : 0;
+      voiceoverProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+
+      if (data.status === "completed") {
+        stopVoiceoverPolling();
+        applyVoiceoverCompleted(data);
+        return;
+      }
+      if (data.status === "failed") {
+        stopVoiceoverPolling();
+        applyVoiceoverFailed(data);
+      }
+    }
+
+    function beginVoiceoverPolling(jobId) {
+      voiceoverActiveJobId = jobId;
+      updateVoiceoverButtonState();
+      if (voiceoverPollTimer) clearInterval(voiceoverPollTimer);
+      voiceoverPollTimer = setInterval(() => {
+        pollVoiceoverJob(jobId).catch((err) => {
+          stopVoiceoverPolling();
+          showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
+        });
+      }, 2000);
+      pollVoiceoverJob(jobId).catch((err) => {
+        stopVoiceoverPolling();
+        showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
+      });
+    }
+
+    function setSimpleVideoPreview(container, fileOrUrl) {
+      if (!fileOrUrl) {
+        container.innerHTML = `<p class="placeholder">Chưa có video</p>`;
+        return;
+      }
+      const src = typeof fileOrUrl === "string" ? fileOrUrl : URL.createObjectURL(fileOrUrl);
+      container.innerHTML = `
+        <div class="preview-wrap">
+          <video src="${src}" controls playsinline></video>
+        </div>
+      `;
+    }
+
+    function resetVoiceoverOutput() {
+      voiceoverOutputPreview.innerHTML = `<p class="placeholder">Video thuyết minh sau khi tạo sẽ hiện ở đây</p>`;
+      voiceoverDownloadBtn.hidden = true;
+      voiceoverDownloadBtn.disabled = true;
+      voiceoverManifestBtn.hidden = true;
+      voiceoverManifestBtn.disabled = true;
+      voiceoverSummary.classList.add("hidden");
+    }
+
+    function validateVoiceoverInputs() {
+      const originalVol = Number(voiceoverOriginalVolume.value);
+      const voiceVol = Number(voiceoverVoiceVolume.value);
+      const cps = Number(voiceoverMaxCps.value);
+      if (!voiceoverSelectedVideo) return "Vui lòng chọn video nguồn.";
+      if (!voiceoverSelectedSrt) return "Vui lòng chọn file SRT lời đọc tiếng Việt.";
+      if (!Number.isFinite(originalVol) || originalVol < 0 || originalVol > 1) {
+        return "Volume gốc phải nằm trong khoảng từ 0 đến 1.";
+      }
+      if (!Number.isFinite(voiceVol) || voiceVol < 0 || voiceVol > 2) {
+        return "Volume thuyết minh phải nằm trong khoảng từ 0 đến 2.";
+      }
+      if (!Number.isFinite(cps) || cps < 8 || cps > 20) {
+        return "Max chars / giây phải nằm trong khoảng từ 8 đến 20.";
+      }
+      return null;
+    }
+
+    async function startVoiceoverJob() {
+      const validationError = validateVoiceoverInputs();
+      if (validationError) {
+        showVoiceoverError(validationError);
+        return;
+      }
+
+      clearVoiceoverError();
+      clearVoiceoverSuccess();
+      resetVoiceoverOutput();
+      stopVoiceoverPolling();
+      voiceoverGenerateBtn.disabled = true;
+      voiceoverProgressWrap.classList.add("visible");
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = "Đã bắt đầu tạo video thuyết minh...";
+
+      const form = new FormData();
+      form.append("input_video", voiceoverSelectedVideo);
+      form.append("voiceover_srt", voiceoverSelectedSrt);
+      form.append("prepare_text", voiceoverPrepareText.checked ? "true" : "false");
+      form.append("voiceover_topic", voiceoverTopic.value);
+      form.append("original_volume", voiceoverOriginalVolume.value);
+      form.append("voice_volume", voiceoverVoiceVolume.value);
+      form.append("max_chars_per_second", voiceoverMaxCps.value);
+
+      try {
+        const res = await fetch("/api/voiceover/jobs", { method: "POST", body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Không tạo được video thuyết minh.");
+
+        if (data.status === "failed") {
+          throw new Error(data.error || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
+        }
+
+        if (data.status === "processing" && data.job_id) {
+          beginVoiceoverPolling(data.job_id);
+          return;
+        }
+
+        if (data.status === "completed") {
+          applyVoiceoverCompleted(data);
+          stopVoiceoverPolling();
+          return;
+        }
+      } catch (err) {
+        stopVoiceoverPolling();
+        voiceoverProgressFill.style.width = "0%";
+        voiceoverProgressText.textContent = "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.";
+        showVoiceoverError(err.message || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
+      }
+    }
+
     document.querySelectorAll('input[name="source_language"]').forEach((radio) => {
       radio.addEventListener("change", () => {
         sourceLang = radio.value;
@@ -1008,6 +1441,30 @@
         topicField.classList.toggle("hidden", sourceLang === "vi");
         translationEngineField.classList.toggle("hidden", sourceLang === "vi");
       });
+    });
+
+    modeVietsubTab.addEventListener("click", () => setMode("vietsub"));
+    modeVoiceoverTab.addEventListener("click", () => setMode("voiceover"));
+
+    voiceoverVideoInput.addEventListener("change", () => {
+      voiceoverSelectedVideo = voiceoverVideoInput.files[0] || null;
+      if (voiceoverSelectedVideo) {
+        setSimpleVideoPreview(voiceoverInputPreview, voiceoverSelectedVideo);
+      } else {
+        voiceoverInputPreview.innerHTML = `<p class="placeholder">Chưa có video</p>`;
+      }
+      clearVoiceoverError();
+      clearVoiceoverSuccess();
+      resetVoiceoverOutput();
+      updateVoiceoverButtonState();
+    });
+
+    voiceoverSrtInput.addEventListener("change", () => {
+      voiceoverSelectedSrt = voiceoverSrtInput.files[0] || null;
+      clearVoiceoverError();
+      clearVoiceoverSuccess();
+      resetVoiceoverOutput();
+      updateVoiceoverButtonState();
     });
 
     layoutControls.textColorPicker.addEventListener("input", () => {
@@ -1973,6 +2430,10 @@
       if (layoutEditing) updateLayoutOverlay();
     });
 
+    voiceoverGenerateBtn.addEventListener("click", async () => {
+      await startVoiceoverJob();
+    });
+
     generateBtn.addEventListener("click", async () => {
       if (!selectedFile) return;
       await startUploadJob();
@@ -2076,6 +2537,9 @@
       pollTimer = setInterval(() => pollJob(jobId), 1500);
       pollJob(jobId);
     }
+
+    setMode("vietsub");
+    resetVoiceoverOutput();
   </script>
 </body>
 </html>

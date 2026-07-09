@@ -5,6 +5,7 @@ import threading
 import traceback
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
@@ -45,6 +46,11 @@ from .url_import_service import (
     validate_video_url,
 )
 from .utils import hex_color_to_ass
+from .voiceover.job_service import (
+    VoiceoverJobError,
+    VoiceoverJobOptions,
+    run_voiceover_job,
+)
 
 load_env()
 
@@ -60,6 +66,14 @@ def _resolve_jobs_root() -> Path:
 
 
 JOBS_ROOT = _resolve_jobs_root()
+def _resolve_voiceover_jobs_root() -> Path:
+    raw = os.getenv("DRAKONSUB_VOICEOVER_JOBS_ROOT", "").strip()
+    if raw:
+        return Path(raw)
+    return Path("voiceover_jobs")
+
+
+VOICEOVER_JOBS_ROOT = _resolve_voiceover_jobs_root()
 JOB_META_FILENAME = "job.json"
 JOB_RELOAD_MESSAGE = "Không tìm thấy video đã tải. Vui lòng tải lại video từ link."
 TRANSLATION_ENGINE_LABELS = {
@@ -105,6 +119,183 @@ jobs: Dict[str, Job] = {}
 jobs_lock = threading.Lock()
 
 app = FastAPI(title="DrakonSub")
+
+
+def _voiceover_validate_job_id(job_id: str) -> str:
+    raw = (job_id or "").strip()
+    if (
+        not raw
+        or "/" in raw
+        or "\\" in raw
+        or ".." in raw
+        or Path(raw).is_absolute()
+    ):
+        raise HTTPException(404, "Voiceover job not found")
+    return raw
+
+
+def _voiceover_job_dir(job_id: str) -> Path:
+    return VOICEOVER_JOBS_ROOT / _voiceover_validate_job_id(job_id)
+
+
+def _voiceover_job_json_path(job_id: str) -> Path:
+    return _voiceover_job_dir(job_id) / "job.json"
+
+
+def _sanitize_voiceover_error(message: str) -> str:
+    text = (message or "").strip()
+    for token_key in ("SAYDI_TTS_API_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+        text = text.replace(os.getenv(token_key, ""), "") if os.getenv(token_key, "") else text
+    return text or "Voiceover job failed"
+
+
+def _voiceover_utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+VOICEOVER_STAGE_PROGRESS = {
+    "queued": 0,
+    "starting": 5,
+    "preparing_text": 15,
+    "generating_voice": 35,
+    "mixing_audio": 80,
+    "completed": 100,
+    "failed": 100,
+}
+
+
+def _voiceover_update_job_json(job_id: str, updates: Dict[str, Any]) -> None:
+    payload = _read_voiceover_job_json(job_id) or {"job_id": job_id}
+    payload.update(updates)
+    payload["updated_at"] = _voiceover_utc_now()
+    _write_voiceover_job_json(job_id, payload)
+
+
+def _voiceover_normalize_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    status = payload.get("status", "processing")
+    output_path = Path(payload.get("output_video") or "")
+    manifest_path = Path(payload.get("manifest") or "")
+    if status == "processing" and output_path.is_file() and manifest_path.is_file():
+        payload = {**payload, "status": "completed", "stage": "completed", "progress_percent": 100}
+    return payload
+
+
+def _voiceover_build_status_response(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _voiceover_normalize_status(payload)
+    status = payload.get("status", "processing")
+    output_path = Path(payload.get("output_video") or "")
+    manifest_path = Path(payload.get("manifest") or "")
+    output_ready = status == "completed" and output_path.is_file()
+    manifest_ready = status == "completed" and manifest_path.is_file()
+    return {
+        "job_id": job_id,
+        "status": status,
+        "stage": payload.get("stage"),
+        "progress_percent": payload.get("progress_percent", VOICEOVER_STAGE_PROGRESS.get(payload.get("stage") or "", 0)),
+        "summary": payload.get("summary"),
+        "error": payload.get("error"),
+        "output_ready": output_ready,
+        "manifest_ready": manifest_ready,
+        "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video" if output_ready else None,
+        "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
+        "status_url": f"/api/voiceover/jobs/{job_id}",
+    }
+
+
+def _run_voiceover_job_background(job_id: str, options: VoiceoverJobOptions) -> None:
+    def progress_callback(stage: str, percent: int) -> None:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "processing",
+                "stage": stage,
+                "progress_percent": percent,
+            },
+        )
+
+    try:
+        result = run_voiceover_job(options, progress_callback=progress_callback)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "progress_percent": 100,
+                "error": None,
+                "output_video": str(result.output_video),
+                "manifest": str(result.manifest_path),
+                "summary": result.summary,
+            },
+        )
+    except VoiceoverJobError as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
+    except Exception as exc:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+                "summary": None,
+            },
+        )
+
+
+def _write_voiceover_job_json(job_id: str, payload: Dict[str, Any]) -> None:
+    job_dir = _voiceover_job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (_voiceover_job_json_path(job_id)).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _read_voiceover_job_json(job_id: str) -> Optional[Dict[str, Any]]:
+    path = _voiceover_job_json_path(job_id)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _voiceover_fallback_payload(job_id: str) -> Optional[Dict[str, Any]]:
+    job_dir = _voiceover_job_dir(job_id)
+    manifest_path = job_dir / "manifest.json"
+    output_path = job_dir / "output_voiceover.mp4"
+    if not manifest_path.is_file() and not output_path.is_file():
+        return None
+    summary = None
+    if manifest_path.is_file():
+        try:
+            summary = json.loads(manifest_path.read_text(encoding="utf-8")).get("summary")
+        except (OSError, json.JSONDecodeError):
+            summary = None
+    return {
+        "job_id": job_id,
+        "status": "completed" if output_path.is_file() else "processing",
+        "stage": "completed" if output_path.is_file() else "processing",
+        "progress_percent": 100 if output_path.is_file() else 0,
+        "created_at": None,
+        "updated_at": None,
+        "error": None,
+        "input_video": None,
+        "voiceover_srt": None,
+        "output_video": str(output_path),
+        "manifest": str(manifest_path),
+        "summary": summary,
+    }
 
 
 def _iter_file_chunks(path: str, start: int, end: int, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
@@ -732,6 +923,123 @@ def get_defaults():
         "default_layout": default_layout_dict(),
         "font_presets": list(FONT_FAMILY_CHOICES),
     }
+
+
+@app.post("/api/voiceover/jobs")
+async def create_voiceover_job(
+    input_video: UploadFile = File(...),
+    voiceover_srt: UploadFile = File(...),
+    prepare_text: bool = Form(True),
+    voiceover_topic: str = Form("catholic"),
+    original_volume: float = Form(0.30),
+    voice_volume: float = Form(1.00),
+    max_chars_per_second: float = Form(13.0),
+    min_gap_ms: int = Form(120),
+    max_borrow_after_ms: int = Form(1200),
+    severe_overflow_ms: int = Form(2000),
+):
+    if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+        raise HTTPException(400, "Unsupported input video format")
+    if not voiceover_srt.filename or Path(voiceover_srt.filename).suffix.lower() != ".srt":
+        raise HTTPException(400, "Unsupported voiceover SRT format")
+
+    job_id = str(uuid.uuid4())
+    job_dir = VOICEOVER_JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    input_path = job_dir / "input.mp4"
+    srt_path = job_dir / "voiceover.srt"
+    prepared_srt_path = job_dir / "prepared_voiceover.srt"
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+
+    input_path.write_bytes(await input_video.read())
+    srt_path.write_bytes(await voiceover_srt.read())
+
+    now = _voiceover_utc_now()
+    initial_payload = {
+        "job_id": job_id,
+        "status": "processing",
+        "stage": "queued",
+        "progress_percent": 0,
+        "created_at": now,
+        "updated_at": now,
+        "error": None,
+        "input_video": str(input_path),
+        "voiceover_srt": str(srt_path),
+        "output_video": str(output_path),
+        "manifest": str(manifest_path),
+        "summary": None,
+    }
+    _write_voiceover_job_json(job_id, initial_payload)
+
+    options = VoiceoverJobOptions(
+        input_video=input_path,
+        voiceover_srt=srt_path,
+        output_video=output_path,
+        workdir=job_dir,
+        original_volume=original_volume,
+        voice_volume=voice_volume,
+        prepare_text=prepare_text,
+        voiceover_topic=voiceover_topic,
+        max_chars_per_second=max_chars_per_second,
+        prepared_srt_output=prepared_srt_path if prepare_text else None,
+        min_gap_ms=min_gap_ms,
+        max_borrow_after_ms=max_borrow_after_ms,
+        severe_overflow_ms=severe_overflow_ms,
+        force=True,
+    )
+    threading.Thread(
+        target=_run_voiceover_job_background,
+        args=(job_id, options),
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "status_url": f"/api/voiceover/jobs/{job_id}",
+        "message": "Đã bắt đầu tạo video thuyết minh.",
+    }
+
+
+@app.get("/api/voiceover/jobs/{job_id}")
+def get_voiceover_job(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
+    if not payload:
+        raise HTTPException(404, "Voiceover job not found")
+    return _voiceover_build_status_response(job_id, payload)
+
+
+@app.get("/api/voiceover/jobs/{job_id}/manifest")
+def get_voiceover_manifest(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
+    if not payload:
+        raise HTTPException(404, "Voiceover job not found")
+    status = _voiceover_build_status_response(job_id, payload)
+    if not status["manifest_ready"]:
+        raise HTTPException(409, "Manifest chưa sẵn sàng. Vui lòng đợi job hoàn tất.")
+    manifest_path = Path(payload.get("manifest") or "")
+    if not manifest_path.is_file():
+        raise HTTPException(404, "Manifest not found")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/voiceover/jobs/{job_id}/output-video")
+def get_voiceover_output_video(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id) or _voiceover_fallback_payload(job_id)
+    if not payload:
+        raise HTTPException(404, "Voiceover job not found")
+    status = _voiceover_build_status_response(job_id, payload)
+    if not status["output_ready"]:
+        raise HTTPException(409, "Video thuyết minh chưa sẵn sàng. Vui lòng đợi job hoàn tất.")
+    output_path = Path(payload.get("output_video") or "")
+    if not output_path.is_file():
+        raise HTTPException(404, "Output video not found")
+    return FileResponse(str(output_path), media_type="video/mp4", filename=output_path.name)
 
 
 @app.post("/api/jobs")

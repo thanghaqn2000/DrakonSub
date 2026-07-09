@@ -1004,6 +1004,19 @@
           </div>
 
           <div class="field-row">
+            <div class="field" style="margin-top:0; flex: 1 1 100%;">
+              <label for="voiceover-saydi-sample">Giọng đọc Saydi</label>
+              <input
+                type="text"
+                id="voiceover-saydi-sample"
+                placeholder="ng-c-huy-n-2-0-69140efab3d5d05406bafb22"
+                autocomplete="off"
+              />
+              <p class="field-hint">Nhập mã giọng/sample của Saydi. Để trống sẽ dùng giọng mặc định trong cấu hình.</p>
+            </div>
+          </div>
+
+          <div class="field-row">
             <div class="field" style="margin-top:0">
               <label for="voiceover-original-volume">Âm lượng video gốc</label>
               <input type="number" id="voiceover-original-volume" min="0" max="1" step="0.05" value="0.18" />
@@ -1168,6 +1181,7 @@
     const voiceoverVideoInput = document.getElementById("voiceover-video-input");
     const voiceoverPrepareText = document.getElementById("voiceover-prepare-text");
     const voiceoverTopic = document.getElementById("voiceover-topic");
+    const voiceoverSaydiSample = document.getElementById("voiceover-saydi-sample");
     const voiceoverOriginalVolume = document.getElementById("voiceover-original-volume");
     const voiceoverVoiceVolume = document.getElementById("voiceover-voice-volume");
     const voiceoverMaxCps = document.getElementById("voiceover-max-cps");
@@ -1241,6 +1255,31 @@
       saving: false,
       activeCueIndex: null,
     };
+
+    let voiceoverDefaultSaydiSample = "";
+
+    async function loadVoiceoverConfig() {
+      try {
+        const res = await fetch("/api/voiceover/config");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.default_saydi_sample) {
+          voiceoverDefaultSaydiSample = data.default_saydi_sample;
+          if (voiceoverSaydiSample && !voiceoverSaydiSample.value.trim()) {
+            voiceoverSaydiSample.value = voiceoverDefaultSaydiSample;
+            voiceoverSaydiSample.placeholder = voiceoverDefaultSaydiSample;
+          }
+        }
+        if (voiceoverOriginalVolume && data.default_original_volume != null) {
+          voiceoverOriginalVolume.value = String(data.default_original_volume);
+        }
+        if (voiceoverVoiceVolume && data.default_voice_volume != null) {
+          voiceoverVoiceVolume.value = String(data.default_voice_volume);
+        }
+      } catch (_err) {
+        // ignore config load errors; render still falls back to backend env default
+      }
+    }
 
     function setMode(mode) {
       currentMode = mode;
@@ -1591,6 +1630,7 @@
         prepare_text: voiceoverPrepareText.checked,
         voiceover_topic: voiceoverTopic.value,
         max_chars_per_second: Number(voiceoverMaxCps.value),
+        saydi_sample: voiceoverSaydiSample.value.trim(),
       };
 
       try {
@@ -1708,6 +1748,7 @@
     }
 
     loadDefaults();
+    loadVoiceoverConfig();
     loadTopics();
 
     function basename(name) {

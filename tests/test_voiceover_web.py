@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -625,6 +626,45 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
         self.assertEqual(thread_kwargs["options"].original_volume, 0.18)
         self.assertEqual(thread_kwargs["options"].voice_volume, 1.0)
+
+    @patch.object(web, "load_saydi_config")
+    def test_voiceover_config_endpoint_returns_defaults(self, mock_load_cfg) -> None:
+        mock_load_cfg.return_value = type("Cfg", (), {"sample": "config-sample"})()
+        res = self.client.get("/api/voiceover/config")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["default_original_volume"], 0.18)
+        self.assertEqual(data["default_voice_volume"], 1.0)
+        self.assertEqual(data["default_saydi_sample"], "config-sample")
+        self.assertNotIn("token", json.dumps(data).lower())
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_render_endpoint_passes_saydi_sample(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        job_id = "render-saydi-sample"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(
+            f"/api/voiceover/script-jobs/{job_id}/render",
+            json={"saydi_sample": "custom-sample-123"},
+        )
+        self.assertEqual(res.status_code, 200)
+        thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
+        self.assertEqual(thread_kwargs["options"].saydi_sample, "custom-sample-123")
+
+    def test_render_rejects_invalid_saydi_sample(self) -> None:
+        job_id = "render-bad-sample"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(
+            f"/api/voiceover/script-jobs/{job_id}/render",
+            json={"saydi_sample": "bad\nsample"},
+        )
+        self.assertEqual(res.status_code, 400)
 
 
 if __name__ == "__main__":

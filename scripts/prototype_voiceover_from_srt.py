@@ -29,6 +29,12 @@ from auto_subtitle.voiceover.audio_mixer import (  # noqa: E402
 )
 from auto_subtitle.voiceover.saydi_tts import load_saydi_config, synthesize_to_file  # noqa: E402
 from auto_subtitle.voiceover.srt_parser import parse_voiceover_srt  # noqa: E402
+from auto_subtitle.voiceover.text_preparer import (  # noqa: E402
+    prepare_voiceover_cues,
+    prepared_to_voiceover_cues,
+    summarize_prepared_cues,
+    write_prepared_srt,
+)
 from auto_subtitle.voiceover.timing_planner import plan_timing  # noqa: E402
 
 
@@ -51,6 +57,10 @@ def run_prototype(
     min_gap_ms: int,
     max_borrow_after_ms: int,
     severe_overflow_ms: int,
+    prepare_text: bool,
+    voiceover_topic: str,
+    max_chars_per_second: float,
+    prepared_srt_output: Path | None,
     force: bool,
 ) -> dict:
     if output_video.exists() and not force:
@@ -60,6 +70,28 @@ def run_prototype(
     cues = parse_voiceover_srt(voiceover_srt)
     if not cues:
         raise ValueError(f"No cues found in {voiceover_srt}")
+
+    prepared_cues = None
+    tts_cues = cues
+    prepared_srt_path = None
+    text_summary = {
+        "text_ok_count": len(cues),
+        "text_shortened_count": 0,
+        "text_too_long_count": 0,
+        "total_original_chars": sum(len(cue.text) for cue in cues),
+        "total_prepared_chars": sum(len(cue.text) for cue in cues),
+        "average_reduction_ratio": 0.0,
+    }
+    if prepare_text:
+        prepared_cues = prepare_voiceover_cues(
+            cues,
+            topic=voiceover_topic,
+            max_chars_per_second=max_chars_per_second,
+        )
+        tts_cues = prepared_to_voiceover_cues(prepared_cues)
+        text_summary = summarize_prepared_cues(prepared_cues)
+        prepared_srt_path = prepared_srt_output or (effective_job_dir / "prepared_voiceover.srt")
+        write_prepared_srt(prepared_cues, prepared_srt_path)
 
     video_duration_ms = probe_video_duration_ms(input_video)
     has_original_audio = video_has_audio_stream(input_video)
@@ -71,22 +103,23 @@ def run_prototype(
     tts_durations_ms: list[int] = []
     saydi_config = load_saydi_config()
 
-    for cue in cues:
+    for cue in tts_cues:
         segment_path = segments_dir / _segment_filename(cue.index)
         synthesize_to_file(cue.text, segment_path, config=saydi_config)
         segment_paths.append(segment_path)
         tts_durations_ms.append(probe_audio_duration_ms(segment_path))
 
     timing_plans = plan_timing(
-        cues,
+        tts_cues,
         tts_durations_ms,
         video_duration_ms=video_duration_ms,
         min_gap_ms=min_gap_ms,
         max_borrow_after_ms=max_borrow_after_ms,
         severe_overflow_ms=severe_overflow_ms,
     )
-    manifests = build_segment_manifests(cues, segment_paths, timing_plans)
+    manifests = build_segment_manifests(tts_cues, segment_paths, timing_plans, prepared_cues=prepared_cues)
     summary = build_manifest_summary(timing_plans)
+    summary.update(text_summary)
 
     voiceover_track = effective_job_dir / "voiceover_track.wav"
     build_voiceover_track(
@@ -120,6 +153,12 @@ def run_prototype(
         "has_original_audio": has_original_audio,
         "original_volume": original_volume,
         "voice_volume": voice_volume,
+        "text_preparation": {
+            "enabled": prepare_text,
+            "topic": voiceover_topic,
+            "max_chars_per_second": max_chars_per_second,
+            **({"prepared_srt_output": str(prepared_srt_path.resolve())} if prepared_srt_path else {}),
+        },
         "timing_config": {
             "min_gap_ms": min_gap_ms,
             "max_borrow_after_ms": max_borrow_after_ms,
@@ -152,6 +191,10 @@ def main() -> int:
     parser.add_argument("--min-gap-ms", type=int, default=120)
     parser.add_argument("--max-borrow-after-ms", type=int, default=1200)
     parser.add_argument("--severe-overflow-ms", type=int, default=2000)
+    parser.add_argument("--prepare-text", action="store_true")
+    parser.add_argument("--voiceover-topic", default="catholic")
+    parser.add_argument("--max-chars-per-second", type=float, default=13.0)
+    parser.add_argument("--prepared-srt-output", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -172,6 +215,10 @@ def main() -> int:
             min_gap_ms=args.min_gap_ms,
             max_borrow_after_ms=args.max_borrow_after_ms,
             severe_overflow_ms=args.severe_overflow_ms,
+            prepare_text=args.prepare_text,
+            voiceover_topic=args.voiceover_topic,
+            max_chars_per_second=args.max_chars_per_second,
+            prepared_srt_output=args.prepared_srt_output,
             force=args.force,
         )
     except Exception as exc:

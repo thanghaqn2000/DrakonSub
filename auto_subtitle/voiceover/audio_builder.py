@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .srt_parser import VoiceoverCue
+from .text_preparer import PreparedVoiceoverCue
 from .timing_planner import TimingPlan
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,14 @@ SAMPLE_RATE = 24_000
 class SegmentManifest:
     index: int
     text: str
+    original_text: str
+    prepared_text: str
+    original_char_count: int
+    prepared_char_count: int
+    target_char_count: int
+    reduction_ratio: float
+    text_status: str
+    text_warnings: list[str]
     original_start_ms: int
     original_end_ms: int
     cue_duration_ms: int
@@ -90,12 +99,16 @@ def build_segment_manifests(
     cues: list[VoiceoverCue],
     segment_paths: list[Path],
     plans: list[TimingPlan],
+    prepared_cues: list[PreparedVoiceoverCue] | None = None,
 ) -> list[SegmentManifest]:
     if not (len(cues) == len(segment_paths) == len(plans)):
         raise ValueError("Cue, segment path, and timing plan lists must align")
+    if prepared_cues is not None and len(prepared_cues) != len(cues):
+        raise ValueError("Prepared cue list must align with cues")
 
     manifests: list[SegmentManifest] = []
-    for cue, segment_path, plan in zip(cues, segment_paths, plans):
+    for idx, (cue, segment_path, plan) in enumerate(zip(cues, segment_paths, plans)):
+        prepared = prepared_cues[idx] if prepared_cues is not None else None
         if plan.overflow_ms > 0:
             logger.warning(
                 "Cue %s planned as %s; overflow=%sms borrowed=%sms overlap_next=%sms",
@@ -109,6 +122,14 @@ def build_segment_manifests(
             SegmentManifest(
                 index=cue.index,
                 text=cue.text,
+                original_text=prepared.original_text if prepared else cue.text,
+                prepared_text=prepared.prepared_text if prepared else cue.text,
+                original_char_count=prepared.original_char_count if prepared else len(cue.text),
+                prepared_char_count=prepared.prepared_char_count if prepared else len(cue.text),
+                target_char_count=prepared.target_char_count if prepared else max(20, len(cue.text)),
+                reduction_ratio=prepared.reduction_ratio if prepared else 0.0,
+                text_status=prepared.status if prepared else "ok",
+                text_warnings=list(prepared.warnings) if prepared else [],
                 original_start_ms=cue.start_ms,
                 original_end_ms=cue.end_ms,
                 cue_duration_ms=cue.duration_ms,

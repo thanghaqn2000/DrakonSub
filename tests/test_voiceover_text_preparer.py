@@ -1,4 +1,3 @@
-import importlib.util
 import sys
 import tempfile
 import unittest
@@ -9,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from auto_subtitle.voiceover.job_service import (  # noqa: E402
+    VoiceoverJobOptions,
+    run_voiceover_job,
+)
 from auto_subtitle.voiceover.srt_parser import VoiceoverCue, parse_voiceover_srt  # noqa: E402
 
 from auto_subtitle.voiceover.text_preparer import (  # noqa: E402
@@ -17,12 +20,6 @@ from auto_subtitle.voiceover.text_preparer import (  # noqa: E402
     summarize_prepared_cues,
     write_prepared_srt,
 )
-
-_CLI_PATH = ROOT / "scripts" / "prototype_voiceover_from_srt.py"
-_CLI_SPEC = importlib.util.spec_from_file_location("prototype_voiceover_from_srt", _CLI_PATH)
-assert _CLI_SPEC and _CLI_SPEC.loader
-prototype_mod = importlib.util.module_from_spec(_CLI_SPEC)
-_CLI_SPEC.loader.exec_module(prototype_mod)
 
 
 def _ms_to_srt_timestamp(value: int) -> str:
@@ -94,15 +91,15 @@ class TextPreparationTests(unittest.TestCase):
         self.assertEqual(loaded[0].end_ms, 3_000)
         self.assertEqual(loaded[0].text, "B")
 
-    @patch.object(prototype_mod, "mux_video_with_audio")
-    @patch.object(prototype_mod, "mix_audio_tracks")
-    @patch.object(prototype_mod, "build_voiceover_track")
-    @patch.object(prototype_mod, "probe_audio_duration_ms", side_effect=[1000])
-    @patch.object(prototype_mod, "synthesize_to_file")
-    @patch.object(prototype_mod, "load_saydi_config", return_value=object())
-    @patch.object(prototype_mod, "video_has_audio_stream", return_value=True)
-    @patch.object(prototype_mod, "probe_video_duration_ms", return_value=20_000)
-    def test_cli_without_prepare_text_preserves_phase2_behavior(
+    @patch("auto_subtitle.voiceover.job_service.mux_video_with_audio")
+    @patch("auto_subtitle.voiceover.job_service.mix_audio_tracks")
+    @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
+    @patch("auto_subtitle.voiceover.job_service.probe_audio_duration_ms", side_effect=[1000])
+    @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
+    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x"})())
+    @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
+    @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=20_000)
+    def test_service_without_prepare_text_preserves_phase2_behavior(
         self,
         _mock_video_duration,
         _mock_has_audio,
@@ -120,11 +117,11 @@ class TextPreparationTests(unittest.TestCase):
                 f"1\n{_ms_to_srt_timestamp(0)} --> {_ms_to_srt_timestamp(2000)}\n{cue.text}\n",
                 encoding="utf-8",
             )
-            manifest = prototype_mod.run_prototype(
+            result = run_voiceover_job(VoiceoverJobOptions(
                 input_video=Path("sample-video.mp4"),
                 voiceover_srt=srt_path,
                 output_video=Path(tmpdir) / "out.mp4",
-                job_dir=None,
+                workdir=Path(tmpdir) / "job",
                 original_volume=0.3,
                 voice_volume=1.0,
                 min_gap_ms=120,
@@ -135,21 +132,23 @@ class TextPreparationTests(unittest.TestCase):
                 max_chars_per_second=13,
                 prepared_srt_output=None,
                 force=True,
-            )
-        self.assertFalse(manifest["text_preparation"]["enabled"])
-        self.assertEqual(manifest["segments"][0]["original_text"], cue.text)
-        self.assertEqual(manifest["segments"][0]["prepared_text"], cue.text)
+            ))
+            manifest = result.manifest_path.read_text(encoding="utf-8")
+        payload = __import__("json").loads(manifest)
+        self.assertFalse(payload["text_preparation"]["enabled"])
+        self.assertEqual(payload["segments"][0]["original_text"], cue.text)
+        self.assertEqual(payload["segments"][0]["prepared_text"], cue.text)
         self.assertEqual(mock_synthesize.call_args.args[0], cue.text)
 
-    @patch.object(prototype_mod, "mux_video_with_audio")
-    @patch.object(prototype_mod, "mix_audio_tracks")
-    @patch.object(prototype_mod, "build_voiceover_track")
-    @patch.object(prototype_mod, "probe_audio_duration_ms", side_effect=[1000])
-    @patch.object(prototype_mod, "synthesize_to_file")
-    @patch.object(prototype_mod, "load_saydi_config", return_value=object())
-    @patch.object(prototype_mod, "video_has_audio_stream", return_value=True)
-    @patch.object(prototype_mod, "probe_video_duration_ms", return_value=20_000)
-    def test_cli_with_prepare_text_writes_prepared_srt(
+    @patch("auto_subtitle.voiceover.job_service.mux_video_with_audio")
+    @patch("auto_subtitle.voiceover.job_service.mix_audio_tracks")
+    @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
+    @patch("auto_subtitle.voiceover.job_service.probe_audio_duration_ms", side_effect=[1000])
+    @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
+    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x"})())
+    @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
+    @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=20_000)
+    def test_service_with_prepare_text_writes_prepared_srt(
         self,
         _mock_video_duration,
         _mock_has_audio,
@@ -168,11 +167,11 @@ class TextPreparationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             prepared_srt = Path(tmpdir) / "prepared_voiceover.srt"
-            manifest = prototype_mod.run_prototype(
+            result = run_voiceover_job(VoiceoverJobOptions(
                 input_video=Path("sample-video.mp4"),
                 voiceover_srt=srt_path,
                 output_video=Path(tmpdir) / "out.mp4",
-                job_dir=None,
+                workdir=Path(tmpdir) / "job",
                 original_volume=0.3,
                 voice_volume=1.0,
                 min_gap_ms=120,
@@ -183,7 +182,8 @@ class TextPreparationTests(unittest.TestCase):
                 max_chars_per_second=13,
                 prepared_srt_output=prepared_srt,
                 force=True,
-            )
+            ))
+            manifest = __import__("json").loads(result.manifest_path.read_text(encoding="utf-8"))
             written = prepared_srt.read_text(encoding="utf-8")
             self.assertTrue(prepared_srt.exists())
             self.assertIn("00:00:00,000 --> 00:00:01,000", written)

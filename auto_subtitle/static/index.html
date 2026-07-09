@@ -952,52 +952,77 @@
     <div class="mode-panel" id="voiceover-panel">
       <section class="controls">
         <p class="voiceover-description">
-          Chức năng này tự nhận diện lời nói trong video, chuyển thành lời thuyết minh tiếng Việt, tạo giọng đọc rồi trộn vào video.
+          Chức năng này tự nhận diện lời nói trong video, chuyển thành lời thuyết minh tiếng Việt. Bạn có thể chỉnh sửa lời đọc trước khi tạo giọng và trộn vào video.
         </p>
 
-        <div class="field">
-          <label for="voiceover-video-input">Video nguồn</label>
-          <input type="file" id="voiceover-video-input" accept="video/*" />
-        </div>
-
-        <div class="field">
-          <label class="toggle-row" for="voiceover-prepare-text">
-            <input type="checkbox" id="voiceover-prepare-text" checked />
-            <span>Chuẩn hoá lời đọc trước khi tạo giọng</span>
-          </label>
-        </div>
-
-        <div class="field-row">
-          <div class="field" style="margin-top:0">
-            <label for="voiceover-topic">Chủ đề</label>
-            <select id="voiceover-topic">
-              <option value="catholic">Công giáo</option>
-            </select>
+        <div id="voiceover-step1">
+          <div class="field">
+            <label for="voiceover-video-input">Video nguồn</label>
+            <input type="file" id="voiceover-video-input" accept="video/*" />
           </div>
-          <div class="field" style="margin-top:0">
-            <label for="voiceover-max-cps">Max chars / giây</label>
-            <input type="number" id="voiceover-max-cps" min="8" max="20" step="1" value="13" />
+
+          <div class="field-row">
+            <div class="field" style="margin-top:0">
+              <label for="voiceover-topic">Chủ đề</label>
+              <select id="voiceover-topic">
+                <option value="catholic">Công giáo</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="actions">
+            <div class="actions-primary">
+              <button class="btn-primary" id="voiceover-script-btn" disabled>Tạo lời thuyết minh</button>
+            </div>
           </div>
         </div>
 
-        <div class="field-row">
-          <div class="field" style="margin-top:0">
-            <label for="voiceover-original-volume">Volume gốc</label>
-            <input type="number" id="voiceover-original-volume" min="0" max="1" step="0.05" value="0.30" />
-          </div>
-          <div class="field" style="margin-top:0">
-            <label for="voiceover-voice-volume">Volume thuyết minh</label>
-            <input type="number" id="voiceover-voice-volume" min="0" max="2" step="0.05" value="1.00" />
+        <div id="voiceover-step2" class="hidden">
+          <h3 style="margin: 1rem 0 0.5rem; font-size: 1rem;">Chỉnh sửa lời đọc</h3>
+          <p class="field-hint">Chỉ sửa nội dung tiếng Việt. Timing giữ nguyên.</p>
+          <div id="voiceover-cue-editor" class="subtitle-modal-body" style="max-height: 420px; padding: 0; margin: 0.75rem 0;"></div>
+          <div class="actions">
+            <div class="actions-secondary">
+              <button class="btn-secondary" id="voiceover-save-cues-btn" disabled>Lưu chỉnh sửa</button>
+            </div>
           </div>
         </div>
 
-        <div class="actions">
-          <div class="actions-primary">
-            <button class="btn-primary" id="voiceover-generate-btn" disabled>Tạo video thuyết minh</button>
+        <div id="voiceover-step3" class="hidden">
+          <div class="field">
+            <label class="toggle-row" for="voiceover-prepare-text">
+              <input type="checkbox" id="voiceover-prepare-text" checked />
+              <span>Chuẩn hoá lời đọc trước khi tạo giọng</span>
+            </label>
           </div>
-          <div class="actions-secondary">
-            <button class="btn-secondary" id="voiceover-download-btn" disabled hidden>Tải video thuyết minh</button>
-            <button class="btn-secondary" id="voiceover-manifest-btn" disabled hidden>Tải manifest</button>
+
+          <div class="field-row">
+            <div class="field" style="margin-top:0">
+              <label for="voiceover-max-cps">Max chars / giây</label>
+              <input type="number" id="voiceover-max-cps" min="8" max="20" step="1" value="13" />
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field" style="margin-top:0">
+              <label for="voiceover-original-volume">Âm lượng video gốc</label>
+              <input type="number" id="voiceover-original-volume" min="0" max="1" step="0.05" value="0.18" />
+              <p class="field-hint">Mặc định giảm nhỏ âm thanh video gốc để giọng thuyết minh rõ hơn.</p>
+            </div>
+            <div class="field" style="margin-top:0">
+              <label for="voiceover-voice-volume">Âm lượng thuyết minh</label>
+              <input type="number" id="voiceover-voice-volume" min="0" max="2" step="0.05" value="1.00" />
+            </div>
+          </div>
+
+          <div class="actions">
+            <div class="actions-primary">
+              <button class="btn-primary" id="voiceover-render-btn" disabled>Tạo video thuyết minh</button>
+            </div>
+            <div class="actions-secondary">
+              <button class="btn-secondary" id="voiceover-download-btn" disabled hidden>Tải video thuyết minh</button>
+              <button class="btn-secondary" id="voiceover-manifest-btn" disabled hidden>Tải manifest</button>
+            </div>
           </div>
         </div>
 
@@ -1146,7 +1171,13 @@
     const voiceoverOriginalVolume = document.getElementById("voiceover-original-volume");
     const voiceoverVoiceVolume = document.getElementById("voiceover-voice-volume");
     const voiceoverMaxCps = document.getElementById("voiceover-max-cps");
-    const voiceoverGenerateBtn = document.getElementById("voiceover-generate-btn");
+    const voiceoverStep1 = document.getElementById("voiceover-step1");
+    const voiceoverStep2 = document.getElementById("voiceover-step2");
+    const voiceoverStep3 = document.getElementById("voiceover-step3");
+    const voiceoverCueEditor = document.getElementById("voiceover-cue-editor");
+    const voiceoverScriptBtn = document.getElementById("voiceover-script-btn");
+    const voiceoverSaveCuesBtn = document.getElementById("voiceover-save-cues-btn");
+    const voiceoverRenderBtn = document.getElementById("voiceover-render-btn");
     const voiceoverDownloadBtn = document.getElementById("voiceover-download-btn");
     const voiceoverManifestBtn = document.getElementById("voiceover-manifest-btn");
     const voiceoverProgressWrap = document.getElementById("voiceover-progress-wrap");
@@ -1195,7 +1226,12 @@
     let currentMode = "vietsub";
     let voiceoverSelectedVideo = null;
     let voiceoverPollTimer = null;
-    let voiceoverActiveJobId = null;
+    let voiceoverScriptJobId = null;
+    let voiceoverScriptCues = [];
+    let voiceoverOriginalCues = [];
+    let voiceoverCuesDirty = false;
+    let voiceoverScriptPolling = false;
+    let voiceoverRenderPolling = false;
     let subtitleState = {
       loaded: [],
       draft: [],
@@ -1236,13 +1272,27 @@
     }
 
     function updateVoiceoverButtonState() {
-      const processing = voiceoverActiveJobId !== null;
-      voiceoverGenerateBtn.disabled = processing || !voiceoverSelectedVideo;
+      const busy = voiceoverScriptPolling || voiceoverRenderPolling;
+      voiceoverScriptBtn.disabled = busy || !voiceoverSelectedVideo || !!voiceoverScriptJobId;
+      voiceoverSaveCuesBtn.disabled = busy || !voiceoverScriptJobId || !voiceoverScriptCues.length;
+      voiceoverRenderBtn.disabled = busy || !voiceoverScriptJobId || voiceoverScriptCues.length === 0;
+    }
+
+    function resetVoiceoverFlow() {
+      voiceoverScriptJobId = null;
+      voiceoverScriptCues = [];
+      voiceoverOriginalCues = [];
+      voiceoverCuesDirty = false;
+      voiceoverStep2.classList.add("hidden");
+      voiceoverStep3.classList.add("hidden");
+      voiceoverCueEditor.innerHTML = `<div class="subtitle-empty">Chưa có lời thuyết minh.</div>`;
+      updateVoiceoverButtonState();
     }
 
     function voiceoverStageMessage(stage, status) {
       if (status === "completed") return "Đã tạo video thuyết minh thành công.";
       if (status === "failed") return "Không tạo được video thuyết minh.";
+      if (status === "script_ready") return "Đã sẵn sàng chỉnh sửa lời thuyết minh.";
       switch (stage) {
         case "queued":
         case "starting":
@@ -1252,7 +1302,9 @@
         case "transcribing":
           return "Đang nhận diện lời nói...";
         case "translating_voiceover":
-          return "Đang dịch lời thuyết minh...";
+          return "Đang tạo lời thuyết minh tiếng Việt...";
+        case "script_ready":
+          return "Đã sẵn sàng chỉnh sửa lời thuyết minh.";
         case "preparing_text":
           return "Đang chuẩn hoá lời đọc...";
         case "generating_voice":
@@ -1260,8 +1312,59 @@
         case "mixing_audio":
           return "Đang trộn giọng với video...";
         default:
-          return "Đã bắt đầu tạo video thuyết minh...";
+          return "Đang xử lý...";
       }
+    }
+
+    function renderVoiceoverCueEditor() {
+      if (!voiceoverScriptCues.length) {
+        voiceoverCueEditor.innerHTML = `<div class="subtitle-empty">Chưa có lời thuyết minh.</div>`;
+        return;
+      }
+      voiceoverCueEditor.innerHTML = voiceoverScriptCues.map((cue, idx) => {
+        const edited = (voiceoverOriginalCues[idx]?.text || "").trim() !== (cue.text || "").trim();
+        return `
+        <div class="subtitle-cue ${edited ? "edited" : ""}" data-cue-index="${cue.index}">
+          <div class="subtitle-cue-head">
+            <div class="subtitle-cue-title">
+              <strong>Cue #${cue.index}</strong>
+              <span class="subtitle-cue-time">${cue.start} → ${cue.end}</span>
+            </div>
+            <span class="badge ${edited ? "edited" : ""}">${edited ? "Đã sửa" : "Bản AI"}</span>
+          </div>
+          <textarea class="subtitle-textarea voiceover-cue-textarea" data-index="${idx}">${escapeHtml(cue.text || "")}</textarea>
+        </div>`;
+      }).join("");
+    }
+
+    function collectVoiceoverCueDraft() {
+      return voiceoverScriptCues.map((cue, idx) => {
+        const textarea = voiceoverCueEditor.querySelector(`textarea[data-index="${idx}"]`);
+        return {
+          index: cue.index,
+          start: cue.start,
+          end: cue.end,
+          text: textarea ? textarea.value : cue.text,
+        };
+      });
+    }
+
+    async function loadVoiceoverScriptCues(jobId) {
+      const res = await fetch(`/api/voiceover/script-jobs/${jobId}/cues`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không tải được lời thuyết minh.");
+      voiceoverScriptCues = (data.cues || []).map((cue) => ({ ...cue }));
+      voiceoverOriginalCues = voiceoverScriptCues.map((cue) => ({ ...cue }));
+      voiceoverCuesDirty = false;
+      renderVoiceoverCueEditor();
+    }
+
+    function showVoiceoverScriptReady() {
+      voiceoverStep2.classList.remove("hidden");
+      voiceoverStep3.classList.remove("hidden");
+      voiceoverProgressWrap.classList.remove("visible");
+      showVoiceoverSuccess("Đã tạo lời thuyết minh. Bạn có thể chỉnh sửa trước khi tạo video.");
+      updateVoiceoverButtonState();
     }
 
     function applyVoiceoverCompleted(data) {
@@ -1300,22 +1403,43 @@
         clearInterval(voiceoverPollTimer);
         voiceoverPollTimer = null;
       }
-      voiceoverActiveJobId = null;
+      voiceoverScriptPolling = false;
+      voiceoverRenderPolling = false;
       updateVoiceoverButtonState();
     }
 
-    async function pollVoiceoverJob(jobId) {
-      const res = await fetch(`/api/voiceover/jobs/${jobId}`);
+    async function pollVoiceoverScriptJob(jobId) {
+      const res = await fetch(`/api/voiceover/script-jobs/${jobId}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Không lấy được trạng thái job thuyết minh.");
 
-      const percent = Number.isFinite(data.progress_percent) ? data.progress_percent : 0;
-      voiceoverProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      if (voiceoverRenderPolling) {
+        const percent = Number.isFinite(data.progress_percent) ? data.progress_percent : 0;
+        voiceoverProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+        voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
+        if (data.status === "completed") {
+          stopVoiceoverPolling();
+          applyVoiceoverCompleted(data);
+          return;
+        }
+        if (data.status === "failed") {
+          stopVoiceoverPolling();
+          applyVoiceoverFailed(data);
+        }
+        return;
+      }
+
+      voiceoverProgressFill.style.width = `${Math.max(0, Math.min(100, data.progress_percent || 0))}%`;
       voiceoverProgressText.textContent = voiceoverStageMessage(data.stage, data.status);
 
-      if (data.status === "completed") {
-        stopVoiceoverPolling();
-        applyVoiceoverCompleted(data);
+      if (data.status === "script_ready") {
+        voiceoverScriptPolling = false;
+        if (voiceoverPollTimer) {
+          clearInterval(voiceoverPollTimer);
+          voiceoverPollTimer = null;
+        }
+        await loadVoiceoverScriptCues(jobId);
+        showVoiceoverScriptReady();
         return;
       }
       if (data.status === "failed") {
@@ -1324,17 +1448,19 @@
       }
     }
 
-    function beginVoiceoverPolling(jobId) {
-      voiceoverActiveJobId = jobId;
+    function beginVoiceoverScriptPolling(jobId, mode = "script") {
+      voiceoverScriptJobId = jobId;
+      voiceoverScriptPolling = mode === "script";
+      voiceoverRenderPolling = mode === "render";
       updateVoiceoverButtonState();
       if (voiceoverPollTimer) clearInterval(voiceoverPollTimer);
       voiceoverPollTimer = setInterval(() => {
-        pollVoiceoverJob(jobId).catch((err) => {
+        pollVoiceoverScriptJob(jobId).catch((err) => {
           stopVoiceoverPolling();
           showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
         });
       }, 2000);
-      pollVoiceoverJob(jobId).catch((err) => {
+      pollVoiceoverScriptJob(jobId).catch((err) => {
         stopVoiceoverPolling();
         showVoiceoverError(err.message || "Không lấy được trạng thái job thuyết minh.");
       });
@@ -1362,16 +1488,16 @@
       voiceoverSummary.classList.add("hidden");
     }
 
-    function validateVoiceoverInputs() {
+    function validateVoiceoverRenderInputs() {
       const originalVol = Number(voiceoverOriginalVolume.value);
       const voiceVol = Number(voiceoverVoiceVolume.value);
       const cps = Number(voiceoverMaxCps.value);
-      if (!voiceoverSelectedVideo) return "Vui lòng chọn video nguồn.";
+      if (!voiceoverScriptJobId) return "Chưa có lời thuyết minh để render.";
       if (!Number.isFinite(originalVol) || originalVol < 0 || originalVol > 1) {
-        return "Volume gốc phải nằm trong khoảng từ 0 đến 1.";
+        return "Âm lượng video gốc phải nằm trong khoảng từ 0 đến 1.";
       }
       if (!Number.isFinite(voiceVol) || voiceVol < 0 || voiceVol > 2) {
-        return "Volume thuyết minh phải nằm trong khoảng từ 0 đến 2.";
+        return "Âm lượng thuyết minh phải nằm trong khoảng từ 0 đến 2.";
       }
       if (!Number.isFinite(cps) || cps < 8 || cps > 20) {
         return "Max chars / giây phải nằm trong khoảng từ 8 đến 20.";
@@ -1379,8 +1505,61 @@
       return null;
     }
 
-    async function startVoiceoverJob() {
-      const validationError = validateVoiceoverInputs();
+    async function saveVoiceoverCues() {
+      if (!voiceoverScriptJobId) return;
+      const cues = collectVoiceoverCueDraft();
+      const res = await fetch(`/api/voiceover/script-jobs/${voiceoverScriptJobId}/cues`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cues }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không lưu được chỉnh sửa.");
+      voiceoverScriptCues = cues.map((cue) => ({ ...cue }));
+      voiceoverCuesDirty = false;
+      renderVoiceoverCueEditor();
+      showVoiceoverSuccess(data.message || "Đã lưu lời thuyết minh đã chỉnh sửa.");
+    }
+
+    async function startVoiceoverScriptJob() {
+      if (!voiceoverSelectedVideo) {
+        showVoiceoverError("Vui lòng chọn video nguồn.");
+        return;
+      }
+
+      clearVoiceoverError();
+      clearVoiceoverSuccess();
+      resetVoiceoverOutput();
+      resetVoiceoverFlow();
+      stopVoiceoverPolling();
+
+      voiceoverScriptPolling = true;
+      updateVoiceoverButtonState();
+      voiceoverProgressWrap.classList.add("visible");
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = "Đã bắt đầu tạo lời thuyết minh...";
+
+      const form = new FormData();
+      form.append("input_video", voiceoverSelectedVideo);
+      form.append("voiceover_topic", voiceoverTopic.value);
+      form.append("max_chars_per_second", voiceoverMaxCps.value);
+
+      try {
+        const res = await fetch("/api/voiceover/script-jobs/from-video", { method: "POST", body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Không tạo được lời thuyết minh.");
+        if (!data.job_id) throw new Error("Không tạo được lời thuyết minh.");
+        voiceoverScriptJobId = data.job_id;
+        beginVoiceoverScriptPolling(data.job_id, "script");
+      } catch (err) {
+        stopVoiceoverPolling();
+        resetVoiceoverFlow();
+        showVoiceoverError(err.message || "Không tạo được lời thuyết minh.");
+      }
+    }
+
+    async function startVoiceoverRenderJob() {
+      const validationError = validateVoiceoverRenderInputs();
       if (validationError) {
         showVoiceoverError(validationError);
         return;
@@ -1390,43 +1569,42 @@
       clearVoiceoverSuccess();
       resetVoiceoverOutput();
       stopVoiceoverPolling();
-      voiceoverGenerateBtn.disabled = true;
-      voiceoverProgressWrap.classList.add("visible");
-      voiceoverProgressFill.style.width = "0%";
-      voiceoverProgressText.textContent = "Đã bắt đầu tạo video thuyết minh...";
-
-      const form = new FormData();
-      form.append("input_video", voiceoverSelectedVideo);
-      form.append("prepare_text", voiceoverPrepareText.checked ? "true" : "false");
-      form.append("voiceover_topic", voiceoverTopic.value);
-      form.append("original_volume", voiceoverOriginalVolume.value);
-      form.append("voice_volume", voiceoverVoiceVolume.value);
-      form.append("max_chars_per_second", voiceoverMaxCps.value);
 
       try {
-        const res = await fetch("/api/voiceover/jobs/from-video", { method: "POST", body: form });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Không tạo được video thuyết minh.");
-
-        if (data.status === "failed") {
-          throw new Error(data.error || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
-        }
-
-        if (data.status === "processing" && data.job_id) {
-          beginVoiceoverPolling(data.job_id);
-          return;
-        }
-
-        if (data.status === "completed") {
-          applyVoiceoverCompleted(data);
-          stopVoiceoverPolling();
-          return;
+        if (voiceoverScriptCues.length) {
+          await saveVoiceoverCues();
         }
       } catch (err) {
+        showVoiceoverError(err.message || "Không lưu được chỉnh sửa trước khi render.");
+        return;
+      }
+
+      voiceoverRenderPolling = true;
+      updateVoiceoverButtonState();
+      voiceoverProgressWrap.classList.add("visible");
+      voiceoverProgressFill.style.width = "55%";
+      voiceoverProgressText.textContent = "Đang bắt đầu tạo video thuyết minh...";
+
+      const body = {
+        original_volume: Number(voiceoverOriginalVolume.value),
+        voice_volume: Number(voiceoverVoiceVolume.value),
+        prepare_text: voiceoverPrepareText.checked,
+        voiceover_topic: voiceoverTopic.value,
+        max_chars_per_second: Number(voiceoverMaxCps.value),
+      };
+
+      try {
+        const res = await fetch(`/api/voiceover/script-jobs/${voiceoverScriptJobId}/render`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Không tạo được video thuyết minh.");
+        beginVoiceoverScriptPolling(voiceoverScriptJobId, "render");
+      } catch (err) {
         stopVoiceoverPolling();
-        voiceoverProgressFill.style.width = "0%";
-        voiceoverProgressText.textContent = "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.";
-        showVoiceoverError(err.message || "Không tạo được video thuyết minh. Vui lòng thử lại hoặc kiểm tra file SRT.");
+        showVoiceoverError(err.message || "Không tạo được video thuyết minh.");
       }
     }
 
@@ -1453,6 +1631,8 @@
       clearVoiceoverError();
       clearVoiceoverSuccess();
       resetVoiceoverOutput();
+      resetVoiceoverFlow();
+      stopVoiceoverPolling();
       updateVoiceoverButtonState();
     });
 
@@ -2419,8 +2599,18 @@
       if (layoutEditing) updateLayoutOverlay();
     });
 
-    voiceoverGenerateBtn.addEventListener("click", async () => {
-      await startVoiceoverJob();
+    voiceoverScriptBtn.addEventListener("click", async () => {
+      await startVoiceoverScriptJob();
+    });
+    voiceoverSaveCuesBtn.addEventListener("click", async () => {
+      try {
+        await saveVoiceoverCues();
+      } catch (err) {
+        showVoiceoverError(err.message || "Không lưu được chỉnh sửa.");
+      }
+    });
+    voiceoverRenderBtn.addEventListener("click", async () => {
+      await startVoiceoverRenderJob();
     });
 
     generateBtn.addEventListener("click", async () => {

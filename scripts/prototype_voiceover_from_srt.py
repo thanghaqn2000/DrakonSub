@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--voiceover-srt", required=True, type=Path)
     parser.add_argument("--output-video", required=True, type=Path)
     parser.add_argument("--job-dir", default=None, type=Path)
-    parser.add_argument("--original-volume", type=float, default=0.30)
+    parser.add_argument("--original-volume", type=float, default=0.18)
     parser.add_argument("--voice-volume", type=float, default=1.00)
     parser.add_argument("--min-gap-ms", type=int, default=120)
     parser.add_argument("--max-borrow-after-ms", type=int, default=1200)

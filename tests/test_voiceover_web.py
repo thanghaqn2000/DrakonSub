@@ -557,6 +557,69 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertEqual(data["cues"][0]["text"], "Da sua")
         self.assertEqual(data["cues"][0]["source_text"], "Original English")
 
+    def test_status_includes_srt_download_urls_when_ready(self) -> None:
+        job_id = "download-urls"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "source.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8"
+        )
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8"
+        )
+        status = self.client.get(f"/api/voiceover/script-jobs/{job_id}").json()
+        self.assertEqual(
+            status["voiceover_srt_download_url"],
+            f"/api/voiceover/script-jobs/{job_id}/download/voiceover-srt",
+        )
+        self.assertEqual(
+            status["source_srt_download_url"],
+            f"/api/voiceover/script-jobs/{job_id}/download/source-srt",
+        )
+
+    def test_download_voiceover_srt_returns_file(self) -> None:
+        job_id = "download-vo"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8"
+        )
+        res = self.client.get(f"/api/voiceover/script-jobs/{job_id}/download/voiceover-srt")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("application/x-subrip", res.headers.get("content-type", ""))
+        self.assertIn("Xin chao", res.text)
+
+    def test_download_voiceover_srt_prefers_edited(self) -> None:
+        job_id = "download-edited"
+        job_dir = self._write_script_job(job_id, edited_srt_ready=True)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        (job_dir / "edited_voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nDa sua\n", encoding="utf-8"
+        )
+        res = self.client.get(f"/api/voiceover/script-jobs/{job_id}/download/voiceover-srt")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Da sua", res.text)
+        self.assertNotIn("Goc", res.text)
+
+    def test_download_source_srt_returns_file(self) -> None:
+        job_id = "download-src"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "source.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nHello world\n", encoding="utf-8"
+        )
+        res = self.client.get(f"/api/voiceover/script-jobs/{job_id}/download/source-srt")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Hello world", res.text)
+
+    def test_download_srt_rejects_when_not_ready(self) -> None:
+        job_id = "download-not-ready"
+        job_dir = self._write_script_job(job_id, status="processing", stage="generating_script")
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8"
+        )
+        res = self.client.get(f"/api/voiceover/script-jobs/{job_id}/download/voiceover-srt")
+        self.assertEqual(res.status_code, 409)
+
     def test_put_cues_writes_edited_srt(self) -> None:
         job_id = "save-cues"
         job_dir = self._write_script_job(job_id)

@@ -1,0 +1,44 @@
+---
+description: Git workflow — branch từ main, PR cho PO review, không tự merge
+alwaysApply: true
+---
+
+# Git Workflow — Branch & PR
+
+Áp dụng cho **mọi task/bug cần thay đổi code**.
+
+## 1. Trước khi sửa code
+
+- `git fetch origin` và đảm bảo base là **`main`** mới nhất.
+- **Tuyệt đối không code trên `main`.**
+- Tạo hoặc checkout nhánh làm việc:
+  - Task mới / bug mới → nhánh mới từ `main`:
+    - `feature/<mô-tả-ngắn>` hoặc `fix/<mô-tả-ngắn>`
+  - Cùng task/PR chưa merge → **được tiếp tục nhánh hiện tại** (không mở nhánh mới).
+
+```bash
+git checkout main && git pull origin main
+git checkout -b feature/ten-task   # hoặc fix/ten-bug
+```
+
+Nếu đang ở `main` có thay đổi chưa commit → **dừng**, tạo nhánh trước khi sửa tiếp.
+
+## 2. Sau khi code xong và test OK
+
+- Commit trên nhánh feature/fix (không commit lên `main`).
+- Push nhánh: `git push -u origin HEAD`
+- Tạo PR cho PO review: `gh pr create` (title + body rõ ràng, có test plan).
+- **Tuyệt đối không tự merge** (`gh pr merge`, squash merge, v.v.) — chờ PO review và merge.
+
+Trả URL PR cho user khi xong.
+
+## 3. Sau khi PO merge
+
+- Chỉ tiếp tục code **sau khi PR đã merge vào `main`**.
+- Task/bug tiếp theo → quay lại bước 1 (checkout `main`, pull, nhánh mới hoặc tiếp tục nhánh cùng task nếu PR chưa merge).
+
+## Cấm
+
+- Code / commit trực tiếp trên `main`
+- Tự merge PR
+- Bắt đầu task mới trên nhánh cũ đã merge (phải từ `main` mới)

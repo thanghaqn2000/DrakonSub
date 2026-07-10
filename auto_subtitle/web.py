@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import dataclass
@@ -55,12 +56,20 @@ from .voiceover.job_service import (
     VoiceoverJobOptions,
     run_voiceover_job,
 )
-from .voiceover.saydi_tts import SaydiConfigError, load_saydi_config, validate_saydi_sample
+from .voiceover.saydi_tts import (
+    SaydiConfigError,
+    SAYDI_SPEED_MAX,
+    SAYDI_SPEED_MIN,
+    load_saydi_config,
+    validate_saydi_sample,
+    validate_saydi_speed,
+)
 from .voiceover.script_job import (
     DEFAULT_ORIGINAL_VOLUME,
     ScriptRenderOptions,
     cues_to_response,
     edited_voiceover_srt_path,
+    load_source_cues,
     load_voiceover_cues,
     render_script_job,
     run_script_generation_job,
@@ -177,6 +186,15 @@ def _parse_optional_saydi_sample(raw: Any) -> Optional[str]:
         raise HTTPException(400, str(exc)) from exc
 
 
+def _parse_optional_saydi_speed(raw: Any) -> Optional[float]:
+    if raw is None:
+        return None
+    try:
+        return validate_saydi_speed(raw)
+    except SaydiConfigError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 def _voiceover_utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -197,7 +215,16 @@ VOICEOVER_STAGE_PROGRESS = {
 
 
 def _voiceover_update_job_json(job_id: str, updates: Dict[str, Any]) -> None:
-    payload = _read_voiceover_job_json(job_id) or {"job_id": job_id}
+    payload = None
+    for _ in range(8):
+        payload = _read_voiceover_job_json(job_id)
+        if payload is not None:
+            break
+        time.sleep(0.025)
+    if payload is None:
+        payload = {"job_id": job_id}
+        if "job_type" in updates:
+            payload["job_type"] = updates["job_type"]
     payload.update(updates)
     payload["updated_at"] = _voiceover_utc_now()
     _write_voiceover_job_json(job_id, payload)
@@ -399,6 +426,7 @@ def _run_voiceover_from_video_background(
     max_borrow_after_ms: int,
     severe_overflow_ms: int,
     saydi_sample: Optional[str] = None,
+    saydi_speed: Optional[float] = None,
 ) -> None:
     output_path = job_dir / "output_voiceover.mp4"
     manifest_path = job_dir / "manifest.json"
@@ -447,6 +475,7 @@ def _run_voiceover_from_video_background(
             max_borrow_after_ms=max_borrow_after_ms,
             severe_overflow_ms=severe_overflow_ms,
             saydi_sample=saydi_sample,
+            saydi_speed=saydi_speed,
             force=True,
         )
         result = run_voiceover_job(options, progress_callback=tts_progress_callback)
@@ -538,20 +567,31 @@ def _run_voiceover_job_background(job_id: str, options: VoiceoverJobOptions) -> 
 def _write_voiceover_job_json(job_id: str, payload: Dict[str, Any]) -> None:
     job_dir = _voiceover_job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    (_voiceover_job_json_path(job_id)).write_text(
+    path = _voiceover_job_json_path(job_id)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    tmp_path.replace(path)
 
 
 def _read_voiceover_job_json(job_id: str) -> Optional[Dict[str, Any]]:
     path = _voiceover_job_json_path(job_id)
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    for attempt in range(6):
+        if not path.is_file():
+            if attempt < 5:
+                time.sleep(0.03)
+                continue
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            if attempt < 5:
+                time.sleep(0.03)
+                continue
+            return None
+    return None
 
 
 def _voiceover_fallback_payload(job_id: str) -> Optional[Dict[str, Any]]:
@@ -1216,6 +1256,9 @@ def get_voiceover_config():
         "default_original_volume": DEFAULT_ORIGINAL_VOLUME,
         "default_voice_volume": 1.0,
         "default_saydi_sample": cfg.sample,
+        "default_saydi_speed": cfg.speed,
+        "saydi_speed_min": SAYDI_SPEED_MIN,
+        "saydi_speed_max": SAYDI_SPEED_MAX,
     }
 
 
@@ -1232,12 +1275,14 @@ async def create_voiceover_job(
     max_borrow_after_ms: int = Form(1200),
     severe_overflow_ms: int = Form(2000),
     saydi_sample: str = Form(""),
+    saydi_speed: str = Form(""),
 ):
     if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(400, "Unsupported input video format")
     if not voiceover_srt.filename or Path(voiceover_srt.filename).suffix.lower() != ".srt":
         raise HTTPException(400, "Unsupported voiceover SRT format")
     parsed_saydi_sample = _parse_optional_saydi_sample(saydi_sample)
+    parsed_saydi_speed = _parse_optional_saydi_speed(saydi_speed)
 
     job_id = str(uuid.uuid4())
     job_dir = VOICEOVER_JOBS_ROOT / job_id
@@ -1284,6 +1329,7 @@ async def create_voiceover_job(
         max_borrow_after_ms=max_borrow_after_ms,
         severe_overflow_ms=severe_overflow_ms,
         saydi_sample=parsed_saydi_sample,
+        saydi_speed=parsed_saydi_speed,
         force=True,
     )
     threading.Thread(
@@ -1312,10 +1358,12 @@ async def create_voiceover_job_from_video(
     max_borrow_after_ms: int = Form(1200),
     severe_overflow_ms: int = Form(2000),
     saydi_sample: str = Form(""),
+    saydi_speed: str = Form(""),
 ):
     if not input_video.filename or Path(input_video.filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(400, "Unsupported input video format")
     parsed_saydi_sample = _parse_optional_saydi_sample(saydi_sample)
+    parsed_saydi_speed = _parse_optional_saydi_speed(saydi_speed)
 
     job_id = str(uuid.uuid4())
     job_dir = VOICEOVER_JOBS_ROOT / job_id
@@ -1360,6 +1408,7 @@ async def create_voiceover_job_from_video(
             "max_borrow_after_ms": max_borrow_after_ms,
             "severe_overflow_ms": severe_overflow_ms,
             "saydi_sample": parsed_saydi_sample,
+            "saydi_speed": parsed_saydi_speed,
         },
         daemon=True,
     ).start()
@@ -1458,11 +1507,12 @@ def get_voiceover_script_job_cues(job_id: str):
     job_dir = _voiceover_job_dir(job_id)
     try:
         cues, source = load_voiceover_cues(job_dir)
+        source_cues = load_source_cues(job_dir)
     except VoiceoverJobError as exc:
         raise HTTPException(409, _sanitize_voiceover_error(str(exc))) from exc
     except SubtitleEditError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return cues_to_response(job_id, cues, source)
+    return cues_to_response(job_id, cues, source, source_cues)
 
 
 @app.put("/api/voiceover/script-jobs/{job_id}/cues")
@@ -1512,7 +1562,11 @@ def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=d
     payload = _read_voiceover_job_json(job_id)
     if not payload or payload.get("job_type") != "script":
         raise HTTPException(404, "Voiceover script job not found")
-    if payload.get("status") not in {"script_ready", "failed"}:
+    if payload.get("status") == "rendering":
+        raise HTTPException(409, "Job đang render, vui lòng đợi hoàn tất.")
+    if payload.get("status") == "processing":
+        raise HTTPException(409, "Lời thuyết minh chưa sẵn sàng để render.")
+    if payload.get("status") not in {"script_ready", "failed", "completed"}:
         raise HTTPException(409, "Job chưa sẵn sàng để render.")
 
     job_dir = _voiceover_job_dir(job_id)
@@ -1533,8 +1587,13 @@ def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=d
         max_borrow_after_ms=int(body.get("max_borrow_after_ms", 1200)),
         severe_overflow_ms=int(body.get("severe_overflow_ms", 2000)),
         saydi_sample=_parse_optional_saydi_sample(body.get("saydi_sample")),
+        saydi_speed=_parse_optional_saydi_speed(body.get("saydi_speed")),
     )
 
+    resolved_saydi = load_saydi_config(
+        sample_override=options.saydi_sample,
+        speed_override=options.saydi_speed,
+    )
     _voiceover_update_job_json(
         job_id,
         {
@@ -1546,7 +1605,8 @@ def render_voiceover_script_job(job_id: str, body: dict = Body(default_factory=d
                 "original_volume": options.original_volume,
                 "voice_volume": options.voice_volume,
                 "prepare_text": options.prepare_text,
-                "saydi_sample": load_saydi_config(sample_override=options.saydi_sample).sample,
+                "saydi_sample": resolved_saydi.sample,
+                "saydi_speed": resolved_saydi.speed,
             },
         },
     )

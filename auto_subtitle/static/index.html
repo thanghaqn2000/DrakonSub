@@ -1014,6 +1014,18 @@
               />
               <p class="field-hint">Nhập mã giọng/sample của Saydi. Để trống sẽ dùng giọng mặc định trong cấu hình.</p>
             </div>
+            <div class="field" style="margin-top:0">
+              <label for="voiceover-saydi-speed">Tốc độ đọc Saydi</label>
+              <input
+                type="number"
+                id="voiceover-saydi-speed"
+                min="0.5"
+                max="2.0"
+                step="0.05"
+                value="1"
+              />
+              <p class="field-hint">1 = bình thường. Giá trị lớn hơn 1 đọc nhanh hơn (tối đa 2.0).</p>
+            </div>
           </div>
 
           <div class="field-row">
@@ -1182,6 +1194,7 @@
     const voiceoverPrepareText = document.getElementById("voiceover-prepare-text");
     const voiceoverTopic = document.getElementById("voiceover-topic");
     const voiceoverSaydiSample = document.getElementById("voiceover-saydi-sample");
+    const voiceoverSaydiSpeed = document.getElementById("voiceover-saydi-speed");
     const voiceoverOriginalVolume = document.getElementById("voiceover-original-volume");
     const voiceoverVoiceVolume = document.getElementById("voiceover-voice-volume");
     const voiceoverMaxCps = document.getElementById("voiceover-max-cps");
@@ -1275,6 +1288,11 @@
         }
         if (voiceoverVoiceVolume && data.default_voice_volume != null) {
           voiceoverVoiceVolume.value = String(data.default_voice_volume);
+        }
+        if (voiceoverSaydiSpeed && data.default_saydi_speed != null) {
+          voiceoverSaydiSpeed.value = String(data.default_saydi_speed);
+          if (data.saydi_speed_min != null) voiceoverSaydiSpeed.min = String(data.saydi_speed_min);
+          if (data.saydi_speed_max != null) voiceoverSaydiSpeed.max = String(data.saydi_speed_max);
         }
       } catch (_err) {
         // ignore config load errors; render still falls back to backend env default
@@ -1371,6 +1389,10 @@
             </div>
             <span class="badge ${edited ? "edited" : ""}">${edited ? "Đã sửa" : "Bản AI"}</span>
           </div>
+          <div class="subtitle-block">
+            <div class="subtitle-block-label">EN:</div>
+            <div class="subtitle-block-text">${escapeHtml(cue.source_text || "")}</div>
+          </div>
           <textarea class="subtitle-textarea voiceover-cue-textarea" data-index="${idx}">${escapeHtml(cue.text || "")}</textarea>
         </div>`;
       }).join("");
@@ -1450,6 +1472,9 @@
     async function pollVoiceoverScriptJob(jobId) {
       const res = await fetch(`/api/voiceover/script-jobs/${jobId}`);
       const data = await res.json();
+      if (res.status === 404 && voiceoverScriptPolling) {
+        return;
+      }
       if (!res.ok) throw new Error(data.detail || "Không lấy được trạng thái job thuyết minh.");
 
       if (voiceoverRenderPolling) {
@@ -1531,6 +1556,9 @@
       const originalVol = Number(voiceoverOriginalVolume.value);
       const voiceVol = Number(voiceoverVoiceVolume.value);
       const cps = Number(voiceoverMaxCps.value);
+      const saydiSpeed = Number(voiceoverSaydiSpeed?.value);
+      const saydiSpeedMin = Number(voiceoverSaydiSpeed?.min || 0.5);
+      const saydiSpeedMax = Number(voiceoverSaydiSpeed?.max || 2.0);
       if (!voiceoverScriptJobId) return "Chưa có lời thuyết minh để render.";
       if (!Number.isFinite(originalVol) || originalVol < 0 || originalVol > 1) {
         return "Âm lượng video gốc phải nằm trong khoảng từ 0 đến 1.";
@@ -1540,6 +1568,9 @@
       }
       if (!Number.isFinite(cps) || cps < 8 || cps > 20) {
         return "Max chars / giây phải nằm trong khoảng từ 8 đến 20.";
+      }
+      if (!Number.isFinite(saydiSpeed) || saydiSpeed < saydiSpeedMin || saydiSpeed > saydiSpeedMax) {
+        return `Tốc độ đọc Saydi phải nằm trong khoảng từ ${saydiSpeedMin} đến ${saydiSpeedMax}.`;
       }
       return null;
     }
@@ -1631,6 +1662,7 @@
         voiceover_topic: voiceoverTopic.value,
         max_chars_per_second: Number(voiceoverMaxCps.value),
         saydi_sample: voiceoverSaydiSample.value.trim(),
+        saydi_speed: Number(voiceoverSaydiSpeed.value),
       };
 
       try {

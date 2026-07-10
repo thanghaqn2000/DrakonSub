@@ -46,6 +46,7 @@ class VoiceoverJobOptions:
     max_borrow_after_ms: int = 1200
     severe_overflow_ms: int = 2000
     saydi_sample: str | None = None
+    saydi_speed: float | None = None
     force: bool = False
 
 
@@ -127,7 +128,10 @@ def run_voiceover_job(
     try:
         video_duration_ms = probe_video_duration_ms(input_video)
         has_original_audio = video_has_audio_stream(input_video)
-        saydi_config = load_saydi_config(sample_override=options.saydi_sample)
+        saydi_config = load_saydi_config(
+            sample_override=options.saydi_sample,
+            speed_override=options.saydi_speed,
+        )
         if not getattr(saydi_config, "token", ""):
             raise VoiceoverJobError("SAYDI_TTS_API_TOKEN is not configured")
 
@@ -213,9 +217,11 @@ def run_voiceover_job(
             "max_borrow_after_ms": options.max_borrow_after_ms,
             "severe_overflow_ms": options.severe_overflow_ms,
             "saydi_sample": saydi_config.sample,
+            "saydi_speed": saydi_config.speed,
         },
         "tts_provider": "saydi",
         "saydi_sample": saydi_config.sample,
+        "saydi_speed": saydi_config.speed,
         "tts_lang": saydi_config.lang,
         "tts_output_format": saydi_config.output_format,
         "video_duration_ms": video_duration_ms,

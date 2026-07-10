@@ -77,7 +77,7 @@ class VoiceoverJobServiceTests(unittest.TestCase):
     @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
     @patch("auto_subtitle.voiceover.job_service.probe_audio_duration_ms", side_effect=[1000])
     @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
-    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "lang": "vi", "output_format": "wav"})())
+    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "speed": 1.0, "lang": "vi", "output_format": "wav"})())
     @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
     @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=20_000)
     def test_force_true_allows_overwrite(
@@ -113,7 +113,7 @@ class VoiceoverJobServiceTests(unittest.TestCase):
     @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
     @patch("auto_subtitle.voiceover.job_service.probe_audio_duration_ms", side_effect=[1000])
     @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
-    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "lang": "vi", "output_format": "wav"})())
+    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "speed": 1.0, "lang": "vi", "output_format": "wav"})())
     @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
     @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=20_000)
     def test_prepare_text_writes_prepared_srt(
@@ -156,7 +156,7 @@ class VoiceoverJobServiceTests(unittest.TestCase):
     @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
     @patch("auto_subtitle.voiceover.job_service.probe_audio_duration_ms", side_effect=[1000])
     @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
-    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "lang": "vi", "output_format": "wav"})())
+    @patch("auto_subtitle.voiceover.job_service.load_saydi_config", return_value=type("Cfg", (), {"token": "x", "sample": "default-sample", "speed": 1.0, "lang": "vi", "output_format": "wav"})())
     @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
     @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=20_000)
     def test_service_returns_result_and_manifest_contains_metadata(
@@ -211,7 +211,13 @@ class VoiceoverJobServiceTests(unittest.TestCase):
         mock_load_cfg.return_value = type(
             "Cfg",
             (),
-            {"token": "x", "sample": "custom-sample-123", "lang": "vi", "output_format": "wav"},
+            {
+                "token": "x",
+                "sample": "custom-sample-123",
+                "speed": 1.4,
+                "lang": "vi",
+                "output_format": "wav",
+            },
         )()
         with tempfile.TemporaryDirectory() as tmpdir:
             input_video = Path(tmpdir) / "input.mp4"
@@ -224,12 +230,17 @@ class VoiceoverJobServiceTests(unittest.TestCase):
                 output_video=Path(tmpdir) / "out.mp4",
                 workdir=Path(tmpdir) / "job",
                 saydi_sample="custom-sample-123",
+                saydi_speed=1.4,
                 force=True,
             )
             result = run_voiceover_job(options)
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-        mock_load_cfg.assert_called_once_with(sample_override="custom-sample-123")
+        mock_load_cfg.assert_called_once_with(
+            sample_override="custom-sample-123",
+            speed_override=1.4,
+        )
         self.assertEqual(manifest["saydi_sample"], "custom-sample-123")
+        self.assertEqual(manifest["saydi_speed"], 1.4)
         self.assertEqual(manifest["tts_provider"], "saydi")
         self.assertNotIn("SAYDI_TTS_API_TOKEN", json.dumps(manifest))
 

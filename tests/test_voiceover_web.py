@@ -486,6 +486,20 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertIn("/api/voiceover/script-jobs/", data["status_url"])
         mock_thread.assert_called_once()
 
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_immediate_status_poll_after_script_job_create(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        res = self.client.post(
+            "/api/voiceover/script-jobs/from-video",
+            files={"input_video": ("clip.mp4", b"fake-video", "video/mp4")},
+            data={"voiceover_topic": "catholic"},
+        )
+        self.assertEqual(res.status_code, 200)
+        job_id = res.json()["job_id"]
+        status_res = self.client.get(f"/api/voiceover/script-jobs/{job_id}")
+        self.assertEqual(status_res.status_code, 200)
+        self.assertEqual(status_res.json()["status"], "processing")
+
     @patch.object(web, "run_voiceover_job")
     @patch("auto_subtitle.web.run_script_generation_job")
     def test_script_generation_does_not_call_tts(
@@ -512,6 +526,9 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
     def test_get_cues_from_voiceover_srt(self) -> None:
         job_id = "cues-base"
         job_dir = self._write_script_job(job_id)
+        (job_dir / "source.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nHello world\n", encoding="utf-8"
+        )
         (job_dir / "voiceover.srt").write_text(
             "1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8"
         )
@@ -521,10 +538,14 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertEqual(data["source"], "voiceover.srt")
         self.assertEqual(len(data["cues"]), 1)
         self.assertEqual(data["cues"][0]["text"], "Xin chao")
+        self.assertEqual(data["cues"][0]["source_text"], "Hello world")
 
     def test_get_cues_prefers_edited_srt(self) -> None:
         job_id = "cues-edited"
         job_dir = self._write_script_job(job_id, edited_srt_ready=True)
+        (job_dir / "source.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nOriginal English\n", encoding="utf-8"
+        )
         (job_dir / "voiceover.srt").write_text(
             "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
         )
@@ -534,6 +555,7 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         data = self.client.get(f"/api/voiceover/script-jobs/{job_id}/cues").json()
         self.assertEqual(data["source"], "edited_voiceover.srt")
         self.assertEqual(data["cues"][0]["text"], "Da sua")
+        self.assertEqual(data["cues"][0]["source_text"], "Original English")
 
     def test_put_cues_writes_edited_srt(self) -> None:
         job_id = "save-cues"
@@ -557,6 +579,35 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertTrue((job_dir / "edited_voiceover.srt").is_file())
         self.assertIn("Da chinh sua", (job_dir / "edited_voiceover.srt").read_text(encoding="utf-8"))
+
+    def test_put_cues_only_persists_vietnamese_text(self) -> None:
+        job_id = "save-cues-no-en"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "source.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nEnglish only in source\n", encoding="utf-8"
+        )
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.put(
+            f"/api/voiceover/script-jobs/{job_id}/cues",
+            json={
+                "cues": [
+                    {
+                        "index": 1,
+                        "start": "00:00:00,000",
+                        "end": "00:00:01,000",
+                        "text": "Da chinh sua",
+                        "source_text": "Should not be saved",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        edited = (job_dir / "edited_voiceover.srt").read_text(encoding="utf-8")
+        self.assertIn("Da chinh sua", edited)
+        self.assertNotIn("Should not be saved", edited)
+        self.assertNotIn("English only in source", edited)
 
     def test_put_cues_rejects_timing_change(self) -> None:
         job_id = "reject-timing"
@@ -627,15 +678,49 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertEqual(thread_kwargs["options"].original_volume, 0.18)
         self.assertEqual(thread_kwargs["options"].voice_volume, 1.0)
 
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_render_allows_rerender_after_completed(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        job_id = "render-rerun"
+        job_dir = self._write_script_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            progress_percent=100,
+        )
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        (job_dir / "output_voiceover.mp4").write_bytes(b"video")
+        res = self.client.post(
+            f"/api/voiceover/script-jobs/{job_id}/render",
+            json={"saydi_speed": 1.4, "max_chars_per_second": 15},
+        )
+        self.assertEqual(res.status_code, 200)
+        thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
+        self.assertEqual(thread_kwargs["options"].saydi_speed, 1.4)
+        self.assertEqual(thread_kwargs["options"].max_chars_per_second, 15.0)
+
+    def test_render_rejects_while_rendering(self) -> None:
+        job_id = "render-busy"
+        job_dir = self._write_script_job(job_id, status="rendering", stage="generating_voice")
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(f"/api/voiceover/script-jobs/{job_id}/render", json={})
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("đang render", res.json()["detail"].lower())
+
     @patch.object(web, "load_saydi_config")
     def test_voiceover_config_endpoint_returns_defaults(self, mock_load_cfg) -> None:
-        mock_load_cfg.return_value = type("Cfg", (), {"sample": "config-sample"})()
+        mock_load_cfg.return_value = type("Cfg", (), {"sample": "config-sample", "speed": 1.1})()
         res = self.client.get("/api/voiceover/config")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["default_original_volume"], 0.18)
         self.assertEqual(data["default_voice_volume"], 1.0)
         self.assertEqual(data["default_saydi_sample"], "config-sample")
+        self.assertEqual(data["default_saydi_speed"], 1.1)
         self.assertNotIn("token", json.dumps(data).lower())
 
     @patch("auto_subtitle.web.threading.Thread")
@@ -653,6 +738,34 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
         self.assertEqual(thread_kwargs["options"].saydi_sample, "custom-sample-123")
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_render_endpoint_passes_saydi_speed(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        job_id = "render-saydi-speed"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(
+            f"/api/voiceover/script-jobs/{job_id}/render",
+            json={"saydi_speed": 1.35},
+        )
+        self.assertEqual(res.status_code, 200)
+        thread_kwargs = mock_thread.call_args.kwargs["kwargs"]
+        self.assertEqual(thread_kwargs["options"].saydi_speed, 1.35)
+
+    def test_render_rejects_invalid_saydi_speed(self) -> None:
+        job_id = "render-bad-speed"
+        job_dir = self._write_script_job(job_id)
+        (job_dir / "voiceover.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nGoc\n", encoding="utf-8"
+        )
+        res = self.client.post(
+            f"/api/voiceover/script-jobs/{job_id}/render",
+            json={"saydi_speed": 9},
+        )
+        self.assertEqual(res.status_code, 400)
 
     def test_render_rejects_invalid_saydi_sample(self) -> None:
         job_id = "render-bad-sample"

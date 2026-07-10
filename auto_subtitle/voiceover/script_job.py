@@ -25,10 +25,15 @@ class ScriptRenderOptions:
     max_borrow_after_ms: int = 1200
     severe_overflow_ms: int = 2000
     saydi_sample: str | None = None
+    saydi_speed: float | None = None
 
 
 def voiceover_srt_path(job_dir: Path) -> Path:
     return job_dir / "voiceover.srt"
+
+
+def source_srt_path(job_dir: Path) -> Path:
+    return job_dir / "source.srt"
 
 
 def edited_voiceover_srt_path(job_dir: Path) -> Path:
@@ -50,6 +55,13 @@ def load_voiceover_cues(job_dir: Path) -> tuple[list[SubtitleCue], str]:
     if edited.is_file():
         return load_srt(edited), "edited_voiceover.srt"
     return load_srt(base), "voiceover.srt"
+
+
+def load_source_cues(job_dir: Path) -> list[SubtitleCue]:
+    path = source_srt_path(job_dir)
+    if not path.is_file():
+        return []
+    return load_srt(path)
 
 
 def validate_edited_cues(
@@ -98,12 +110,24 @@ def save_edited_voiceover_cues(job_dir: Path, cues: list[SubtitleCue]) -> None:
     write_srt(cues, edited_voiceover_srt_path(job_dir))
 
 
-def cues_to_response(job_id: str, cues: list[SubtitleCue], source: str) -> dict:
+def cues_to_response(
+    job_id: str,
+    cues: list[SubtitleCue],
+    source: str,
+    source_cues: list[SubtitleCue] | None = None,
+) -> dict:
+    source_by_index = {cue.index: cue.text for cue in (source_cues or [])}
     return {
         "job_id": job_id,
         "source": source,
         "cues": [
-            {"index": cue.index, "start": cue.start, "end": cue.end, "text": cue.text}
+            {
+                "index": cue.index,
+                "start": cue.start,
+                "end": cue.end,
+                "text": cue.text,
+                "source_text": source_by_index.get(cue.index, ""),
+            }
             for cue in cues
         ],
     }
@@ -154,6 +178,7 @@ def render_script_job(
         max_borrow_after_ms=options.max_borrow_after_ms,
         severe_overflow_ms=options.severe_overflow_ms,
         saydi_sample=options.saydi_sample,
+        saydi_speed=options.saydi_speed,
         force=True,
     )
     return run_voiceover_job(job_options, progress_callback=on_progress)

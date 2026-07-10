@@ -10,8 +10,10 @@ from auto_subtitle.voiceover.saydi_tts import (
     build_saydi_request_payload,
     load_saydi_config,
     resolve_saydi_sample,
+    resolve_saydi_speed,
     synthesize_to_file,
     validate_saydi_sample,
+    validate_saydi_speed,
 )
 
 
@@ -33,6 +35,26 @@ class SaydiSampleValidationTests(unittest.TestCase):
         self.assertEqual(validate_saydi_sample(" ng-c-huy-n-2-0-abc "), "ng-c-huy-n-2-0-abc")
 
 
+class SaydiSpeedValidationTests(unittest.TestCase):
+    def test_empty_returns_none(self) -> None:
+        self.assertIsNone(validate_saydi_speed(None))
+        self.assertIsNone(validate_saydi_speed(""))
+
+    def test_accepts_in_range(self) -> None:
+        self.assertEqual(validate_saydi_speed("1.2"), 1.2)
+
+    def test_rejects_out_of_range(self) -> None:
+        with self.assertRaises(SaydiConfigError):
+            validate_saydi_speed(3.0)
+
+    @patch.dict(os.environ, {"SAYDI_TTS_SPEED": "1.15"}, clear=True)
+    def test_resolve_speed_from_env(self) -> None:
+        self.assertEqual(resolve_saydi_speed(), 1.15)
+
+    def test_speed_override_takes_precedence(self) -> None:
+        self.assertEqual(resolve_saydi_speed(1.5), 1.5)
+
+
 class SaydiConfigTests(unittest.TestCase):
     @patch("auto_subtitle.voiceover.saydi_tts.load_env")
     @patch.dict(
@@ -49,6 +71,7 @@ class SaydiConfigTests(unittest.TestCase):
         cfg = load_saydi_config()
         self.assertEqual(cfg.sample, "env-sample")
         self.assertEqual(cfg.lang, "vi")
+        self.assertEqual(cfg.speed, 1.0)
 
     @patch("auto_subtitle.voiceover.saydi_tts.load_env")
     @patch.dict(
@@ -62,6 +85,19 @@ class SaydiConfigTests(unittest.TestCase):
     def test_sample_override_changes_config(self, _mock_load_env) -> None:
         cfg = load_saydi_config(sample_override="custom-sample-123")
         self.assertEqual(cfg.sample, "custom-sample-123")
+
+    @patch("auto_subtitle.voiceover.saydi_tts.load_env")
+    @patch.dict(
+        os.environ,
+        {
+            "SAYDI_TTS_API_TOKEN": "secret-token",
+            "SAYDI_TTS_SAMPLE": "env-sample",
+        },
+        clear=True,
+    )
+    def test_speed_override_changes_config(self, _mock_load_env) -> None:
+        cfg = load_saydi_config(speed_override=1.35)
+        self.assertEqual(cfg.speed, 1.35)
 
     @patch("auto_subtitle.voiceover.saydi_tts.load_env")
     @patch.dict(
@@ -111,6 +147,7 @@ class SaydiRequestPayloadTests(unittest.TestCase):
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["sample"], "custom-sample-123")
         self.assertEqual(payload["text"], "Xin chao")
+        self.assertEqual(payload["speed"], 1.0)
         self.assertNotIn("token", payload)
         self.assertTrue(request.headers["Authorization"].startswith("Bearer "))
         self.assertIn("secret-token", request.headers["Authorization"])
@@ -124,6 +161,7 @@ class SaydiRequestPayloadTests(unittest.TestCase):
                 api_url="https://example.test/tts",
                 token="t",
                 sample="voice-1",
+                speed=1.25,
                 output_format="wav",
                 timeout_seconds=30,
                 lang="vi",
@@ -136,6 +174,7 @@ class SaydiRequestPayloadTests(unittest.TestCase):
                 "sample": "voice-1",
                 "output_format": "wav",
                 "lang": "vi",
+                "speed": 1.25,
             },
         )
 

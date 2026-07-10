@@ -984,6 +984,8 @@
           <div class="actions">
             <div class="actions-secondary">
               <button class="btn-secondary" id="voiceover-save-cues-btn" disabled>Lưu chỉnh sửa</button>
+              <button class="btn-secondary" id="voiceover-download-srt-btn" disabled hidden>Tải SRT thuyết minh</button>
+              <button class="btn-secondary" id="voiceover-download-source-srt-btn" disabled hidden>Tải SRT gốc (EN)</button>
             </div>
           </div>
         </div>
@@ -1204,6 +1206,8 @@
     const voiceoverCueEditor = document.getElementById("voiceover-cue-editor");
     const voiceoverScriptBtn = document.getElementById("voiceover-script-btn");
     const voiceoverSaveCuesBtn = document.getElementById("voiceover-save-cues-btn");
+    const voiceoverDownloadSrtBtn = document.getElementById("voiceover-download-srt-btn");
+    const voiceoverDownloadSourceSrtBtn = document.getElementById("voiceover-download-source-srt-btn");
     const voiceoverRenderBtn = document.getElementById("voiceover-render-btn");
     const voiceoverDownloadBtn = document.getElementById("voiceover-download-btn");
     const voiceoverManifestBtn = document.getElementById("voiceover-manifest-btn");
@@ -1328,6 +1332,25 @@
       voiceoverSuccessBox.textContent = "";
     }
 
+    function updateVoiceoverSrtDownloadButtons(data) {
+      const voiceoverUrl = data?.voiceover_srt_download_url || null;
+      const sourceUrl = data?.source_srt_download_url || null;
+      if (voiceoverDownloadSrtBtn) {
+        voiceoverDownloadSrtBtn.hidden = !voiceoverUrl;
+        voiceoverDownloadSrtBtn.disabled = !voiceoverUrl;
+        voiceoverDownloadSrtBtn.onclick = voiceoverUrl
+          ? () => { window.location.href = voiceoverUrl; }
+          : null;
+      }
+      if (voiceoverDownloadSourceSrtBtn) {
+        voiceoverDownloadSourceSrtBtn.hidden = !sourceUrl;
+        voiceoverDownloadSourceSrtBtn.disabled = !sourceUrl;
+        voiceoverDownloadSourceSrtBtn.onclick = sourceUrl
+          ? () => { window.location.href = sourceUrl; }
+          : null;
+      }
+    }
+
     function updateVoiceoverButtonState() {
       const busy = voiceoverScriptPolling || voiceoverRenderPolling;
       voiceoverScriptBtn.disabled = busy || !voiceoverSelectedVideo || !!voiceoverScriptJobId;
@@ -1343,6 +1366,7 @@
       voiceoverStep2.classList.add("hidden");
       voiceoverStep3.classList.add("hidden");
       voiceoverCueEditor.innerHTML = `<div class="subtitle-empty">Chưa có lời thuyết minh.</div>`;
+      updateVoiceoverSrtDownloadButtons({});
       updateVoiceoverButtonState();
     }
 
@@ -1420,10 +1444,11 @@
       renderVoiceoverCueEditor();
     }
 
-    function showVoiceoverScriptReady() {
+    function showVoiceoverScriptReady(data = {}) {
       voiceoverStep2.classList.remove("hidden");
       voiceoverStep3.classList.remove("hidden");
       voiceoverProgressWrap.classList.remove("visible");
+      updateVoiceoverSrtDownloadButtons(data);
       showVoiceoverSuccess("Đã tạo lời thuyết minh. Bạn có thể chỉnh sửa trước khi tạo video.");
       updateVoiceoverButtonState();
     }
@@ -1503,7 +1528,7 @@
           voiceoverPollTimer = null;
         }
         await loadVoiceoverScriptCues(jobId);
-        showVoiceoverScriptReady();
+        showVoiceoverScriptReady(data);
         return;
       }
       if (data.status === "failed") {

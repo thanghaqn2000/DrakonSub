@@ -69,11 +69,13 @@ from .voiceover.script_job import (
     ScriptRenderOptions,
     cues_to_response,
     edited_voiceover_srt_path,
+    effective_voiceover_srt_path,
     load_source_cues,
     load_voiceover_cues,
     render_script_job,
     run_script_generation_job,
     save_edited_voiceover_cues,
+    source_srt_path,
     validate_edited_cues,
     voiceover_srt_path,
 )
@@ -270,6 +272,9 @@ def _voiceover_build_script_status_response(job_id: str, payload: Dict[str, Any]
     manifest_ready = status == "completed" and manifest_path.is_file()
     voiceover_srt = voiceover_srt_path(_voiceover_job_dir(job_id))
     edited_srt = edited_voiceover_srt_path(_voiceover_job_dir(job_id))
+    source_srt = source_srt_path(_voiceover_job_dir(job_id))
+    voiceover_ready = voiceover_srt.is_file()
+    source_ready = source_srt.is_file()
     return {
         "job_id": job_id,
         "status": status,
@@ -277,8 +282,8 @@ def _voiceover_build_script_status_response(job_id: str, payload: Dict[str, Any]
         "progress_percent": payload.get(
             "progress_percent", VOICEOVER_STAGE_PROGRESS.get(payload.get("stage") or "", 0)
         ),
-        "source_srt_ready": voiceover_srt.parent.joinpath("source.srt").is_file(),
-        "voiceover_srt_ready": voiceover_srt.is_file(),
+        "source_srt_ready": source_ready,
+        "voiceover_srt_ready": voiceover_ready,
         "edited_srt_ready": bool(payload.get("edited_srt_ready")) or edited_srt.is_file(),
         "cue_count": payload.get("cue_count"),
         "summary": payload.get("summary"),
@@ -287,6 +292,12 @@ def _voiceover_build_script_status_response(job_id: str, payload: Dict[str, Any]
         "manifest_ready": manifest_ready,
         "output_video_url": f"/api/voiceover/jobs/{job_id}/output-video" if output_ready else None,
         "manifest_url": f"/api/voiceover/jobs/{job_id}/manifest" if manifest_ready else None,
+        "voiceover_srt_download_url": (
+            f"/api/voiceover/script-jobs/{job_id}/download/voiceover-srt" if voiceover_ready else None
+        ),
+        "source_srt_download_url": (
+            f"/api/voiceover/script-jobs/{job_id}/download/source-srt" if source_ready else None
+        ),
         "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
         "status_url": f"/api/voiceover/script-jobs/{job_id}",
     }
@@ -1513,6 +1524,44 @@ def get_voiceover_script_job_cues(job_id: str):
     except SubtitleEditError as exc:
         raise HTTPException(400, str(exc)) from exc
     return cues_to_response(job_id, cues, source, source_cues)
+
+
+@app.get("/api/voiceover/script-jobs/{job_id}/download/voiceover-srt")
+def download_voiceover_script_srt(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    if payload.get("status") not in {"script_ready", "rendering", "completed"}:
+        raise HTTPException(409, "Lời thuyết minh chưa sẵn sàng để tải.")
+    job_dir = _voiceover_job_dir(job_id)
+    path = effective_voiceover_srt_path(job_dir)
+    if not path.is_file():
+        raise HTTPException(404, "Voiceover SRT not found")
+    return FileResponse(
+        str(path),
+        media_type="application/x-subrip",
+        filename=f"voiceover-{job_id[:8]}.srt",
+    )
+
+
+@app.get("/api/voiceover/script-jobs/{job_id}/download/source-srt")
+def download_voiceover_source_srt(job_id: str):
+    _voiceover_validate_job_id(job_id)
+    payload = _read_voiceover_job_json(job_id)
+    if not payload or payload.get("job_type") != "script":
+        raise HTTPException(404, "Voiceover script job not found")
+    if payload.get("status") not in {"script_ready", "rendering", "completed"}:
+        raise HTTPException(409, "Lời thuyết minh chưa sẵn sàng để tải.")
+    job_dir = _voiceover_job_dir(job_id)
+    path = source_srt_path(job_dir)
+    if not path.is_file():
+        raise HTTPException(404, "Source SRT not found")
+    return FileResponse(
+        str(path),
+        media_type="application/x-subrip",
+        filename=f"source-{job_id[:8]}.srt",
+    )
 
 
 @app.put("/api/voiceover/script-jobs/{job_id}/cues")

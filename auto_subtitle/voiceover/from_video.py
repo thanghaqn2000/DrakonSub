@@ -5,7 +5,14 @@ from typing import Callable, Optional
 
 from ..pipeline import SubtitleConfig, extract_audio, transcribe_to_srt, translate_srt_file
 from ..translation_topics import normalize_topic
+from ..utils import parse_srt, write_srt_entries
 from .job_service import VoiceoverJobError
+from .srt_quality import (
+    group_source_cues_for_voiceover,
+    optimize_voiceover_srt_entries,
+    voiceover_narration_translation_context,
+    write_voiceover_srt_entries,
+)
 
 ProgressCallback = Callable[[str, int], None]
 
@@ -16,6 +23,21 @@ def build_voiceover_subtitle_config(voiceover_topic: str) -> SubtitleConfig:
     config.translation_topic = normalize_topic(voiceover_topic)
     config.source_language = "en"
     return config
+
+
+def _group_source_srt_for_voiceover(source_srt: Path) -> None:
+    """Rewrite source.srt with phrase-level cue grouping before translation."""
+    entries = parse_srt(source_srt.read_text(encoding="utf-8"))
+    grouped = group_source_cues_for_voiceover(entries)
+    with open(source_srt, "w", encoding="utf-8") as handle:
+        write_srt_entries(grouped, file=handle)
+
+
+def _optimize_voiceover_srt(voiceover_srt: Path) -> None:
+    """Compact, stretch CPS, drop empty cues, and reindex final voiceover.srt."""
+    entries = parse_srt(voiceover_srt.read_text(encoding="utf-8"))
+    optimized = optimize_voiceover_srt_entries(entries)
+    write_voiceover_srt_entries(optimized, voiceover_srt)
 
 
 def prepare_voiceover_srt_from_video(
@@ -44,8 +66,19 @@ def prepare_voiceover_srt_from_video(
         _report("transcribing", 25)
         transcribe_to_srt(str(audio_path), str(source_srt), config)
 
+        _report("grouping_source_cues", 35)
+        _group_source_srt_for_voiceover(source_srt)
+
         _report("translating_voiceover", 45)
-        translate_srt_file(str(source_srt), str(voiceover_srt), config)
+        translate_srt_file(
+            str(source_srt),
+            str(voiceover_srt),
+            config,
+            translation_context=voiceover_narration_translation_context(),
+        )
+
+        _report("optimizing_voiceover_srt", 48)
+        _optimize_voiceover_srt(voiceover_srt)
     except VoiceoverJobError:
         raise
     except Exception as exc:

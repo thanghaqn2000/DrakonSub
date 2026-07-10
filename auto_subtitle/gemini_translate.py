@@ -6,6 +6,13 @@ import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
+from .gemini_keys import (
+    GeminiQuotaError,
+    call_gemini_with_key_rotation,
+    load_gemini_api_keys,
+    resolve_gemini_model_for_keys,
+)
+
 from .config import (
     get_gemini_model,
     get_phrase_group_max_cues,
@@ -294,10 +301,14 @@ def _call_gemini_json(
                 f"Raw error: {detail}"
             ) from exc
         if exc.code == 429 and "quota" in detail.lower():
-            raise GeminiNonRetryableError(
+            raise GeminiQuotaError(
                 f"Gemini quota exceeded for model '{model}'. "
                 "Enable billing or request higher quota to run Pro models. "
                 f"Raw error: {detail}"
+            ) from exc
+        if exc.code == 429:
+            raise GeminiQuotaError(
+                f"Gemini rate limit exceeded for model '{model}'. Raw error: {detail}"
             ) from exc
         raise RuntimeError(f"Gemini API HTTP {exc.code}: {detail}") from exc
 
@@ -318,8 +329,29 @@ def _call_gemini_json(
     return text, usage
 
 
+def call_gemini_json_with_key_rotation(
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.4,
+    *,
+    api_keys: Optional[List[str]] = None,
+    action: str = "Gemini request",
+) -> Tuple[str, Dict]:
+    return call_gemini_with_key_rotation(
+        lambda api_key: _call_gemini_json(
+            api_key=api_key,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+        ),
+        api_keys=api_keys,
+        action=action,
+    )
+
+
 def _call_gemini_translate_grouped(
-    api_key: str,
     model: str,
     batch_groups: List[List[int]],
     all_texts: List[str],
@@ -327,10 +359,11 @@ def _call_gemini_translate_grouped(
     topic: str,
     translation_context: Optional[dict] = None,
     non_empty_indices: Optional[List[int]] = None,
+    *,
+    api_keys: Optional[List[str]] = None,
 ) -> Tuple[List[str], Dict]:
     total_cues = sum(len(g) for g in batch_groups)
-    content, usage = _call_gemini_json(
-        api_key=api_key,
+    content, usage = call_gemini_json_with_key_rotation(
         model=model,
         system_prompt=_build_gemini_system_prompt(topic),
         user_prompt=_build_grouped_user_prompt(
@@ -341,12 +374,13 @@ def _call_gemini_translate_grouped(
             non_empty_indices,
         ),
         temperature=0.4,
+        api_keys=api_keys,
+        action="Gemini translation batch",
     )
     return _parse_json_strings(content, "translations", total_cues), usage
 
 
 def _translate_batch_with_retry(
-    api_key: str,
     model: str,
     batch_groups: List[List[int]],
     all_texts: List[str],
@@ -355,13 +389,14 @@ def _translate_batch_with_retry(
     max_retries: int = 2,
     translation_context: Optional[dict] = None,
     non_empty_indices: Optional[List[int]] = None,
+    *,
+    api_keys: Optional[List[str]] = None,
 ) -> Tuple[List[str], Dict]:
     attempts = 0
     last_usage: Dict = {}
     while attempts <= max_retries:
         try:
             result, usage = _call_gemini_translate_grouped(
-                api_key,
                 model,
                 batch_groups,
                 all_texts,
@@ -369,13 +404,14 @@ def _translate_batch_with_retry(
                 topic,
                 translation_context,
                 non_empty_indices,
+                api_keys=api_keys,
             )
             return result, {
                 "retry_count": attempts,
                 "usage": usage,
                 "fallback_mode": "batch",
             }
-        except GeminiNonRetryableError:
+        except (GeminiNonRetryableError, GeminiQuotaError):
             raise
         except Exception as exc:
             attempts += 1
@@ -391,7 +427,6 @@ def _translate_batch_with_retry(
         while group_attempt <= max_retries:
             try:
                 group_result, usage = _call_gemini_translate_grouped(
-                    api_key,
                     model,
                     [group],
                     all_texts,
@@ -399,12 +434,13 @@ def _translate_batch_with_retry(
                     topic,
                     translation_context,
                     non_empty_indices,
+                    api_keys=api_keys,
                 )
                 results.extend(group_result)
                 last_usage = usage
                 total_retries += group_attempt
                 break
-            except GeminiNonRetryableError:
+            except (GeminiNonRetryableError, GeminiQuotaError):
                 raise
             except Exception as exc:
                 group_attempt += 1
@@ -457,15 +493,18 @@ def translate_srt_entries_gemini(
     *,
     strict_cue_count: bool = False,
 ) -> List[dict]:
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
+    api_keys = load_gemini_api_keys()
+    if not api_keys:
         raise ValueError(
-            "GEMINI_API_KEY not found. Add it to .env when TRANSLATION_ENGINE=gemini."
+            "No Gemini API keys configured. Set GEMINI_API_KEY_1..4 in .env "
+            "when TRANSLATION_ENGINE=gemini."
         )
 
     topic = normalize_topic(topic or os.getenv("TRANSLATION_TOPIC"))
     model = model or get_gemini_model()
-    model = _resolve_gemini_model(api_key, model)
+    model, _resolved_key = resolve_gemini_model_for_keys(
+        api_keys, model, _resolve_gemini_model
+    )
     batch_size = batch_size or get_translation_batch_size()
     max_cues_per_group = min(get_phrase_group_max_cues(), batch_size)
 
@@ -505,7 +544,6 @@ def translate_srt_entries_gemini(
             f"({len(batch_local_indices)} lines)..."
         )
         results, stats = _translate_batch_with_retry(
-            api_key=api_key,
             model=model,
             batch_groups=batch_groups,
             all_texts=non_empty_texts,
@@ -513,6 +551,7 @@ def translate_srt_entries_gemini(
             topic=topic,
             translation_context=translation_context,
             non_empty_indices=non_empty_indices,
+            api_keys=api_keys,
         )
         _log_batch_metrics(
             model=model,

@@ -28,9 +28,10 @@ from .config import (
 from .translation_prompt_context import enrich_user_prompt
 from .gemini_translate import (
     GeminiNonRetryableError,
-    _call_gemini_json,
     _resolve_gemini_model,
+    call_gemini_json_with_key_rotation,
 )
+from .gemini_keys import load_gemini_api_keys, resolve_gemini_model_for_keys
 from .openai_chat import create_chat_completion
 from .translation_topics import normalize_topic
 
@@ -415,16 +416,19 @@ def _call_editor_batch(
             client, model, user_prompt, temperature, system_prompt
         )
     elif provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not found for VI editor pass.")
-        model = _resolve_gemini_model(api_key, model)
-        content, usage = _call_gemini_json(
-            api_key=api_key,
+        api_keys = load_gemini_api_keys()
+        if not api_keys:
+            raise ValueError("No Gemini API keys configured for VI editor pass.")
+        model, _resolved_key = resolve_gemini_model_for_keys(
+            api_keys, model, _resolve_gemini_model
+        )
+        content, usage = call_gemini_json_with_key_rotation(
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
+            api_keys=api_keys,
+            action="VI editor batch",
         )
     else:
         raise ValueError(f"Unsupported VI editor provider: {provider}")

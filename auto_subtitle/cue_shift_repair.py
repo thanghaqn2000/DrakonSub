@@ -83,12 +83,17 @@ def _build_window_repair_prompt(
 
 def _call_window_repair_model(prompt: str, engine: str) -> str:
     if engine == "gemini":
-        from .gemini_translate import _call_gemini_json
+        from .gemini_translate import call_gemini_json_with_key_rotation
         from .config import get_gemini_model
+        from .gemini_keys import load_gemini_api_keys
 
-        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        content, _ = _call_gemini_json(
-            api_key, get_gemini_model(), _WINDOW_REPAIR_SYSTEM, prompt, temperature=llm_temperature(0.2)
+        content, _ = call_gemini_json_with_key_rotation(
+            get_gemini_model(),
+            _WINDOW_REPAIR_SYSTEM,
+            prompt,
+            temperature=llm_temperature(0.2),
+            api_keys=load_gemini_api_keys(),
+            action="Cue shift repair",
         )
         return content
 

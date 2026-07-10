@@ -64,6 +64,7 @@ from .voiceover.saydi_tts import (
     validate_saydi_sample,
     validate_saydi_speed,
 )
+from .gemini_keys import gemini_configured, load_gemini_api_keys
 from .voiceover.script_job import (
     DEFAULT_ORIGINAL_VOLUME,
     ScriptRenderOptions,
@@ -172,8 +173,19 @@ def _voiceover_job_json_path(job_id: str) -> Path:
 
 def _sanitize_voiceover_error(message: str) -> str:
     text = (message or "").strip()
-    for token_key in ("SAYDI_TTS_API_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+    for token_key in (
+        "SAYDI_TTS_API_TOKEN",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GEMINI_API_KEY_1",
+        "GEMINI_API_KEY_2",
+        "GEMINI_API_KEY_3",
+        "GEMINI_API_KEY_4",
+    ):
         text = text.replace(os.getenv(token_key, ""), "") if os.getenv(token_key, "") else text
+    for api_key in load_gemini_api_keys():
+        if api_key:
+            text = text.replace(api_key, "")
     return text or "Voiceover job failed"
 
 
@@ -1238,7 +1250,7 @@ def health_check():
         "translation_engine": config.translation_engine,
         "whisper_model": config.model,
         "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "gemini_configured": gemini_configured(),
     }
 
 

@@ -10,11 +10,17 @@ from typing import Any, Optional
 
 from auto_subtitle.config import load_env
 
-DEFAULT_SAYDI_SAMPLE = "ng-c-huy-n-2-0-69140efab3d5d05406bafb22"
+DEFAULT_SAYDI_SAMPLE = "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc"
 DEFAULT_SAYDI_SPEED = 1.0
 SAYDI_SPEED_MIN = 0.5
 SAYDI_SPEED_MAX = 2.0
 SAYDI_SAMPLE_MAX_LEN = 200
+SAYDI_VOICE_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Liam", "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc"),
+    ("Quyến rũ", "quyen-ru-f966mdF5njWREvreUG07"),
+    ("Truyền cảm hứng", "ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6"),
+    ("Moncellence", "moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR"),
+)
 SAYDI_SAMPLE_INVALID_MESSAGE = (
     "Giọng đọc Saydi không hợp lệ. Vui lòng kiểm tra mã giọng/sample."
 )
@@ -37,6 +43,10 @@ class SaydiConfig:
     timeout_seconds: int
     lang: str
     model: str | None = None
+
+
+def list_saydi_voice_presets() -> list[dict[str, str]]:
+    return [{"label": label, "sample": sample} for label, sample in SAYDI_VOICE_PRESETS]
 
 
 def validate_saydi_sample(value: str | None) -> str | None:

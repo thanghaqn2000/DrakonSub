@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from auto_subtitle.voiceover.saydi_tts import (
+    DEFAULT_SAYDI_SAMPLE,
     SaydiConfigError,
     build_saydi_request_payload,
+    list_saydi_voice_presets,
     load_saydi_config,
     resolve_saydi_sample,
     resolve_saydi_speed,
@@ -33,6 +35,16 @@ class SaydiSampleValidationTests(unittest.TestCase):
 
     def test_accepts_hyphenated_slug(self) -> None:
         self.assertEqual(validate_saydi_sample(" ng-c-huy-n-2-0-abc "), "ng-c-huy-n-2-0-abc")
+
+    def test_voice_presets_default_to_liam(self) -> None:
+        presets = list_saydi_voice_presets()
+        self.assertEqual(len(presets), 4)
+        self.assertEqual(presets[0]["label"], "Liam")
+        self.assertEqual(presets[0]["sample"], DEFAULT_SAYDI_SAMPLE)
+        self.assertEqual(
+            DEFAULT_SAYDI_SAMPLE,
+            "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc",
+        )
 
 
 class SaydiSpeedValidationTests(unittest.TestCase):

@@ -487,6 +487,85 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         mock_thread.assert_called_once()
 
     @patch("auto_subtitle.web.threading.Thread")
+    def test_post_script_job_from_url_auto_detects_youtube(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        res = self.client.post(
+            "/api/voiceover/script-jobs/from-url",
+            json={
+                "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "voiceover_topic": "catholic",
+                "max_chars_per_second": 13,
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "processing")
+        self.assertEqual(data["provider"], "youtube")
+        self.assertIn("/api/voiceover/script-jobs/", data["status_url"])
+        status = self.client.get(data["status_url"]).json()
+        self.assertEqual(status["status"], "processing")
+        self.assertEqual(status["stage"], "downloading")
+        self.assertEqual(status["url_provider"], "youtube")
+        mock_thread.assert_called_once()
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_post_script_job_from_url_auto_detects_facebook(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        res = self.client.post(
+            "/api/voiceover/script-jobs/from-url",
+            json={"url": "https://www.facebook.com/watch/?v=1234567890"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["provider"], "facebook")
+
+    def test_post_script_job_from_url_rejects_unsupported_link(self) -> None:
+        res = self.client.post(
+            "/api/voiceover/script-jobs/from-url",
+            json={"url": "https://example.com/video.mp4"},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    @patch("auto_subtitle.web.run_script_generation_job")
+    def test_from_url_background_downloads_then_generates(self, mock_script_gen) -> None:
+        job_id = "from-url-bg"
+        job_dir = self._write_script_job(
+            job_id,
+            status="processing",
+            stage="downloading",
+            progress_percent=0,
+            url_provider="youtube",
+        )
+        input_path = job_dir / "input.mp4"
+        source_srt = job_dir / "source.srt"
+        voiceover_srt = job_dir / "voiceover.srt"
+        source_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+        voiceover_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nXin chao\n", encoding="utf-8")
+
+        def _fake_download(url, output_dir, *, output_filename="input.mp4"):
+            path = Path(output_dir) / output_filename
+            path.write_bytes(b"downloaded-video")
+            return {"path": str(path), "provider": "youtube", "title": "Demo"}
+
+        with patch(
+            "auto_subtitle.url_import_service.download_video_from_url",
+            side_effect=_fake_download,
+        ):
+            mock_script_gen.return_value = (source_srt, voiceover_srt)
+            web._run_script_generation_from_url_background(
+                job_id,
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                job_dir,
+                voiceover_topic="catholic",
+            )
+
+        mock_script_gen.assert_called_once()
+        status = self.client.get(f"/api/voiceover/script-jobs/{job_id}").json()
+        self.assertEqual(status["status"], "script_ready")
+        self.assertEqual(status["url_provider"], "youtube")
+        self.assertEqual(status["source_title"], "Demo")
+        self.assertTrue(input_path.is_file())
+
+    @patch("auto_subtitle.web.threading.Thread")
     def test_immediate_status_poll_after_script_job_create(self, mock_thread) -> None:
         mock_thread.return_value.start = MagicMock()
         res = self.client.post(

@@ -312,6 +312,8 @@ def _voiceover_build_script_status_response(job_id: str, payload: Dict[str, Any]
         ),
         "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
         "status_url": f"/api/voiceover/script-jobs/{job_id}",
+        "url_provider": payload.get("url_provider"),
+        "source_title": payload.get("source_title"),
     }
 
 
@@ -372,6 +374,81 @@ def _run_script_generation_background(
                 "error": _sanitize_voiceover_error(str(exc)),
             },
         )
+
+
+def _run_script_generation_from_url_background(
+    job_id: str,
+    url: str,
+    job_dir: Path,
+    *,
+    voiceover_topic: str,
+) -> None:
+    from .url_import_service import cleanup_partial_downloads, download_video_from_url
+
+    input_path = job_dir / "input.mp4"
+    try:
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "processing",
+                "stage": "downloading",
+                "progress_percent": 2,
+                "error": None,
+            },
+        )
+        download_result = download_video_from_url(
+            url,
+            job_dir,
+            output_filename="input.mp4",
+        )
+        resolved = Path(download_result.get("path") or input_path)
+        if not resolved.is_file():
+            raise UrlImportError(
+                "Tải video thất bại. Vui lòng thử lại hoặc tải file video trực tiếp."
+            )
+        if resolved.resolve() != input_path.resolve():
+            resolved.replace(input_path)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "input_video": str(input_path),
+                "url_provider": download_result.get("provider"),
+                "source_title": download_result.get("title"),
+                "stage": "starting",
+                "progress_percent": 5,
+            },
+        )
+    except UrlImportError as exc:
+        cleanup_partial_downloads(job_dir)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+        return
+    except Exception as exc:
+        cleanup_partial_downloads(job_dir)
+        _voiceover_update_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+        return
+
+    _run_script_generation_background(
+        job_id,
+        input_path,
+        job_dir,
+        voiceover_topic=voiceover_topic,
+    )
 
 
 def _run_script_render_background(
@@ -1507,6 +1584,75 @@ async def create_voiceover_script_job_from_video(
         "status_url": f"/api/voiceover/script-jobs/{job_id}",
         "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
         "message": "Đã bắt đầu tạo lời thuyết minh.",
+    }
+
+
+@app.post("/api/voiceover/script-jobs/from-url")
+def create_voiceover_script_job_from_url(body: dict = Body(default_factory=dict)):
+    url = str(body.get("url", "")).strip()
+    voiceover_topic = str(body.get("voiceover_topic", "catholic")).strip() or "catholic"
+    try:
+        max_chars_per_second = float(body.get("max_chars_per_second", 13.0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "max_chars_per_second không hợp lệ.") from exc
+
+    try:
+        safe_url = validate_video_url(url)
+        provider = detect_provider(safe_url)
+    except UrlImportError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    job_id = str(uuid.uuid4())
+    job_dir = VOICEOVER_JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    input_path = job_dir / "input.mp4"
+    output_path = job_dir / "output_voiceover.mp4"
+    manifest_path = job_dir / "manifest.json"
+
+    now = _voiceover_utc_now()
+    initial_payload = {
+        "job_id": job_id,
+        "job_type": "script",
+        "status": "processing",
+        "stage": "downloading",
+        "progress_percent": 0,
+        "created_at": now,
+        "updated_at": now,
+        "error": None,
+        "input_video": str(input_path),
+        "voiceover_srt": None,
+        "output_video": str(output_path),
+        "manifest": str(manifest_path),
+        "summary": None,
+        "source_srt_ready": False,
+        "voiceover_srt_ready": False,
+        "edited_srt_ready": False,
+        "cue_count": None,
+        "max_chars_per_second": max_chars_per_second,
+        "voiceover_topic": voiceover_topic,
+        "source_url": safe_url,
+        "url_provider": provider,
+    }
+    _write_voiceover_job_json(job_id, initial_payload)
+
+    threading.Thread(
+        target=_run_script_generation_from_url_background,
+        kwargs={
+            "job_id": job_id,
+            "url": safe_url,
+            "job_dir": job_dir,
+            "voiceover_topic": voiceover_topic,
+        },
+        daemon=True,
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "provider": provider,
+        "status_url": f"/api/voiceover/script-jobs/{job_id}",
+        "cues_url": f"/api/voiceover/script-jobs/{job_id}/cues",
+        "message": "Đã bắt đầu tải video và tạo lời thuyết minh.",
     }
 
 

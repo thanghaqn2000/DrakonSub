@@ -126,18 +126,20 @@ def _call_openai_context(user_prompt: str) -> str:
 
 
 def _call_gemini_context(user_prompt: str) -> str:
-    from .gemini_translate import _call_gemini_json
+    from .gemini_translate import call_gemini_json_with_key_rotation
+    from .gemini_keys import load_gemini_api_keys
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY required for video context analysis")
+    api_keys = load_gemini_api_keys()
+    if not api_keys:
+        raise ValueError("Gemini API keys required for video context analysis")
 
-    content, _ = _call_gemini_json(
-        api_key,
+    content, _ = call_gemini_json_with_key_rotation(
         get_gemini_model(),
         _SYSTEM_PROMPT,
         user_prompt,
         temperature=llm_temperature(0.2),
+        api_keys=api_keys,
+        action="Video context analysis",
     )
     return content
 

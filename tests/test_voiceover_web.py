@@ -861,8 +861,19 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["default_original_volume"], 0.18)
         self.assertEqual(data["default_voice_volume"], 1.0)
-        self.assertEqual(data["default_saydi_sample"], "config-sample")
+        self.assertEqual(
+            data["default_saydi_sample"],
+            "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc",
+        )
         self.assertEqual(data["default_saydi_speed"], 1.1)
+        self.assertEqual(
+            data["saydi_voice_options"][0],
+            {
+                "label": "Liam",
+                "sample": "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc",
+            },
+        )
+        self.assertEqual(len(data["saydi_voice_options"]), 4)
         self.assertNotIn("token", json.dumps(data).lower())
 
     @patch("auto_subtitle.web.threading.Thread")

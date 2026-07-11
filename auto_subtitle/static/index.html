@@ -1024,13 +1024,13 @@
           <div class="field-row">
             <div class="field" style="margin-top:0; flex: 1 1 100%;">
               <label for="voiceover-saydi-sample">Giọng đọc Saydi</label>
-              <input
-                type="text"
-                id="voiceover-saydi-sample"
-                placeholder="ng-c-huy-n-2-0-69140efab3d5d05406bafb22"
-                autocomplete="off"
-              />
-              <p class="field-hint">Nhập mã giọng/sample của Saydi. Để trống sẽ dùng giọng mặc định trong cấu hình.</p>
+              <select id="voiceover-saydi-sample">
+                <option value="liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc" selected>Liam</option>
+                <option value="quyen-ru-f966mdF5njWREvreUG07">Quyến rũ</option>
+                <option value="ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6">Truyền cảm hứng</option>
+                <option value="moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR">Moncellence</option>
+              </select>
+              <p class="field-hint">Chọn giọng Saydi. Mặc định: Liam.</p>
             </div>
             <div class="field" style="margin-top:0">
               <label for="voiceover-saydi-speed">Tốc độ đọc Saydi</label>
@@ -1291,7 +1291,27 @@
       activeCueIndex: null,
     };
 
-    let voiceoverDefaultSaydiSample = "";
+    let voiceoverDefaultSaydiSample = "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc";
+
+    function populateSaydiVoiceOptions(options, selectedSample) {
+      if (!voiceoverSaydiSample) return;
+      const voices = Array.isArray(options) && options.length
+        ? options
+        : [
+            { label: "Liam", sample: "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc" },
+            { label: "Quyến rũ", sample: "quyen-ru-f966mdF5njWREvreUG07" },
+            { label: "Truyền cảm hứng", sample: "ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6" },
+            { label: "Moncellence", sample: "moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR" },
+          ];
+      const preferred = selectedSample || voiceoverDefaultSaydiSample || voices[0].sample;
+      voiceoverSaydiSample.innerHTML = voices.map((voice) => {
+        const sample = String(voice.sample || "");
+        const label = String(voice.label || sample);
+        const selected = sample === preferred ? " selected" : "";
+        return `<option value="${sample.replace(/"/g, "&quot;")}"${selected}>${label.replace(/</g, "&lt;")}</option>`;
+      }).join("");
+      voiceoverSaydiSample.value = preferred;
+    }
 
     async function loadVoiceoverConfig() {
       try {
@@ -1300,11 +1320,8 @@
         const data = await res.json();
         if (data.default_saydi_sample) {
           voiceoverDefaultSaydiSample = data.default_saydi_sample;
-          if (voiceoverSaydiSample && !voiceoverSaydiSample.value.trim()) {
-            voiceoverSaydiSample.value = voiceoverDefaultSaydiSample;
-            voiceoverSaydiSample.placeholder = voiceoverDefaultSaydiSample;
-          }
         }
+        populateSaydiVoiceOptions(data.saydi_voice_options, voiceoverDefaultSaydiSample);
         if (voiceoverOriginalVolume && data.default_original_volume != null) {
           voiceoverOriginalVolume.value = String(data.default_original_volume);
         }
@@ -1317,7 +1334,7 @@
           if (data.saydi_speed_max != null) voiceoverSaydiSpeed.max = String(data.saydi_speed_max);
         }
       } catch (_err) {
-        // ignore config load errors; render still falls back to backend env default
+        populateSaydiVoiceOptions(null, voiceoverDefaultSaydiSample);
       }
     }
 

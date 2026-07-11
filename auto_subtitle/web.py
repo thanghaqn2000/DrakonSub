@@ -57,9 +57,11 @@ from .voiceover.job_service import (
     run_voiceover_job,
 )
 from .voiceover.saydi_tts import (
-    SaydiConfigError,
+    DEFAULT_SAYDI_SAMPLE,
     SAYDI_SPEED_MAX,
     SAYDI_SPEED_MIN,
+    SaydiConfigError,
+    list_saydi_voice_presets,
     load_saydi_config,
     validate_saydi_sample,
     validate_saydi_speed,
@@ -1355,10 +1357,11 @@ def get_voiceover_config():
     return {
         "default_original_volume": DEFAULT_ORIGINAL_VOLUME,
         "default_voice_volume": 1.0,
-        "default_saydi_sample": cfg.sample,
+        "default_saydi_sample": DEFAULT_SAYDI_SAMPLE,
         "default_saydi_speed": cfg.speed,
         "saydi_speed_min": SAYDI_SPEED_MIN,
         "saydi_speed_max": SAYDI_SPEED_MAX,
+        "saydi_voice_options": list_saydi_voice_presets(),
     }
 
 

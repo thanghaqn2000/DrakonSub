@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,9 @@ from .utils import (
 load_env()
 
 ProgressCallback = Callable[[str, int], None]
+
+# Whisper load/transcribe is not safe across concurrent web job threads.
+_WHISPER_LOCK = threading.Lock()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -149,14 +153,27 @@ def _transcribe_en_to_srt(
         transcribe_args["language"] = config.language
 
     _report(on_progress, "Loading Whisper model...", 15)
-    model = whisper.load_model(config.model)
+    with _WHISPER_LOCK:
+        model = whisper.load_model(config.model)
 
-    _report(on_progress, "Transcribing audio...", 20)
-    warnings.filterwarnings("ignore")
-    result = model.transcribe(audio_path, word_timestamps=True, **transcribe_args)
-    warnings.filterwarnings("default")
+        _report(on_progress, "Transcribing audio...", 20)
+        warnings.filterwarnings("ignore")
+        result = model.transcribe(audio_path, word_timestamps=True, **transcribe_args)
+        warnings.filterwarnings("default")
 
-    segments = build_word_aligned_segments(result["segments"])
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            "Whisper transcription returned an empty result. "
+            "Retry the job; avoid running multiple transcriptions at once."
+        )
+    raw_segments = result.get("segments")
+    if not isinstance(raw_segments, list):
+        raise RuntimeError(
+            "Whisper transcription returned no segments. "
+            "Retry the job; avoid running multiple transcriptions at once."
+        )
+
+    segments = build_word_aligned_segments(raw_segments)
     with open(srt_path, "w", encoding="utf-8") as srt:
         write_srt(segments, file=srt)
 

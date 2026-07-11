@@ -14,7 +14,9 @@ from auto_subtitle.voiceover.audio_builder import (  # noqa: E402
 from auto_subtitle.voiceover.srt_parser import VoiceoverCue  # noqa: E402
 from auto_subtitle.voiceover.timing_planner import (  # noqa: E402
     TimingPlan,
+    cue_audio_budget_ms,
     plan_timing,
+    suggest_saydi_speed_for_budget,
 )
 
 
@@ -53,14 +55,41 @@ class SegmentManifestTests(unittest.TestCase):
         self.assertEqual(manifests[0].planned_end_ms, 5_200)
         self.assertEqual(manifests[0].status, "extended_into_gap")
 
-    def test_overflow_warning_when_borrowing_is_insufficient(self) -> None:
+    def test_overflow_without_resolve_reports_overlap_next(self) -> None:
         cues = [
             VoiceoverCue(index=1, start_ms=0, end_ms=2_000, text="one"),
             VoiceoverCue(index=2, start_ms=2_500, end_ms=5_000, text="two"),
         ]
-        plans = plan_timing(cues, [3_000, 1_000], video_duration_ms=20_000)
+        plans = plan_timing(
+            cues,
+            [3_000, 1_000],
+            video_duration_ms=20_000,
+            resolve_overlaps=False,
+        )
         self.assertEqual(plans[0].status, "overflow_warning")
         self.assertGreater(plans[0].overlap_next_ms, 0)
+
+    def test_resolve_overlaps_shifts_next_cue_and_clears_overlap(self) -> None:
+        # Cue 12/13 style: TTS longer than slot; next cue starts ~80ms after capped plan.
+        cues = [
+            VoiceoverCue(index=12, start_ms=51_720, end_ms=53_500, text="long"),
+            VoiceoverCue(index=13, start_ms=53_580, end_ms=55_000, text="next"),
+        ]
+        plans = plan_timing(
+            cues,
+            [2_910, 1_200],
+            video_duration_ms=120_000,
+            min_gap_ms=120,
+            resolve_overlaps=True,
+        )
+        self.assertEqual(plans[0].planned_start_ms, 51_720)
+        self.assertEqual(plans[0].planned_end_ms, 51_720 + 2_910)
+        self.assertEqual(plans[0].overlap_next_ms, 0)
+        self.assertEqual(plans[1].planned_start_ms, 51_720 + 2_910 + 120)
+        self.assertEqual(plans[1].shifted_ms, plans[1].planned_start_ms - 53_580)
+        self.assertGreater(plans[1].shifted_ms, 0)
+        self.assertEqual(plans[1].status, "shifted_to_avoid_overlap")
+        self.assertEqual(plans[1].overlap_next_ms, 0)
 
     def test_severe_overflow_when_remaining_overflow_is_large(self) -> None:
         cues = [
@@ -72,6 +101,7 @@ class SegmentManifestTests(unittest.TestCase):
             [5_500, 1_000],
             video_duration_ms=20_000,
             severe_overflow_ms=2_000,
+            resolve_overlaps=False,
         )
         self.assertEqual(plans[0].status, "severe_overflow")
         self.assertGreater(plans[0].overflow_ms, 2_000)
@@ -84,6 +114,9 @@ class SegmentManifestTests(unittest.TestCase):
         plans = plan_timing(cues, [2_500, 1_000], video_duration_ms=20_000, min_gap_ms=120)
         self.assertEqual(plans[0].borrowed_gap_after_ms, 0)
         self.assertEqual(plans[0].status, "overflow_warning")
+        self.assertEqual(plans[0].overlap_next_ms, 0)
+        self.assertEqual(plans[1].planned_start_ms, 2_500 + 120)
+        self.assertEqual(plans[1].status, "shifted_to_avoid_overlap")
 
     def test_last_cue_can_extend_to_video_duration(self) -> None:
         cues = [
@@ -92,6 +125,53 @@ class SegmentManifestTests(unittest.TestCase):
         plans = plan_timing(cues, [1_800], video_duration_ms=10_900, min_gap_ms=120)
         self.assertEqual(plans[0].borrowed_gap_after_ms, 800)
         self.assertEqual(plans[0].status, "extended_into_gap")
+        self.assertEqual(plans[0].planned_end_ms, 10_800)
+
+    def test_cue_audio_budget_includes_borrowable_gap(self) -> None:
+        cue = VoiceoverCue(index=1, start_ms=0, end_ms=1_780, text="x")
+        budget = cue_audio_budget_ms(
+            cue,
+            next_start_ms=1_860,
+            video_duration_ms=60_000,
+            is_last_cue=False,
+            min_gap_ms=120,
+            max_borrow_after_ms=1_200,
+        )
+        self.assertEqual(budget, 1_780)
+
+    def test_suggest_saydi_speed_raises_when_over_budget(self) -> None:
+        speed = suggest_saydi_speed_for_budget(
+            base_speed=1.0,
+            tts_duration_ms=2_910,
+            budget_ms=1_780,
+            max_speed=2.0,
+        )
+        self.assertGreater(speed, 1.0)
+        self.assertLessEqual(speed, 2.0)
+
+    def test_suggest_saydi_speed_keeps_base_when_within_budget(self) -> None:
+        speed = suggest_saydi_speed_for_budget(
+            base_speed=1.2,
+            tts_duration_ms=1_000,
+            budget_ms=1_500,
+        )
+        self.assertEqual(speed, 1.2)
+
+    def test_manifest_includes_shifted_and_speed(self) -> None:
+        cues = [
+            VoiceoverCue(index=1, start_ms=0, end_ms=2_000, text="one"),
+            VoiceoverCue(index=2, start_ms=2_500, end_ms=4_000, text="two"),
+        ]
+        plans = plan_timing(cues, [3_000, 1_000], video_duration_ms=20_000)
+        manifests = build_segment_manifests(
+            cues,
+            [Path("segments/0001.wav"), Path("segments/0002.wav")],
+            plans,
+            saydi_speeds=[1.6, 1.0],
+        )
+        self.assertEqual(manifests[0].saydi_speed, 1.6)
+        self.assertGreater(manifests[1].shifted_ms, 0)
+        self.assertEqual(manifests[1].saydi_speed, 1.0)
 
     def test_manifest_summary_counts_are_correct(self) -> None:
         plans = [
@@ -131,21 +211,41 @@ class SegmentManifestTests(unittest.TestCase):
                 cue_duration_ms=1_000,
                 tts_duration_ms=4_200,
                 planned_start_ms=5_000,
-                planned_end_ms=6_200,
+                planned_end_ms=9_200,
                 overflow_ms=3_200,
                 borrowed_gap_after_ms=200,
-                overlap_next_ms=2_000,
+                overlap_next_ms=0,
                 status="severe_overflow",
+                shifted_ms=0,
+            ),
+            TimingPlan(
+                index=4,
+                text="four",
+                original_start_ms=7_000,
+                original_end_ms=8_000,
+                cue_duration_ms=1_000,
+                tts_duration_ms=800,
+                planned_start_ms=7_400,
+                planned_end_ms=8_200,
+                overflow_ms=0,
+                borrowed_gap_after_ms=0,
+                overlap_next_ms=0,
+                status="shifted_to_avoid_overlap",
+                shifted_ms=400,
             ),
         ]
         summary = build_manifest_summary(plans)
-        self.assertEqual(summary["cue_count"], 3)
+        self.assertEqual(summary["cue_count"], 4)
         self.assertEqual(summary["ok_count"], 1)
         self.assertEqual(summary["extended_count"], 1)
+        self.assertEqual(summary["shifted_count"], 1)
         self.assertEqual(summary["overflow_warning_count"], 0)
         self.assertEqual(summary["severe_overflow_count"], 1)
         self.assertEqual(summary["max_overflow_ms"], 3_200)
+        self.assertEqual(summary["max_shifted_ms"], 400)
         self.assertEqual(summary["total_borrowed_gap_ms"], 700)
+        self.assertEqual(summary["total_shifted_ms"], 400)
+        self.assertEqual(summary["overlap_next_count"], 0)
         self.assertIsInstance(plans[0], TimingPlan)
         self.assertIsInstance(
             build_segment_manifests(

@@ -37,6 +37,8 @@ class SegmentManifest:
     borrowed_gap_after_ms: int
     overlap_next_ms: int
     status: str
+    shifted_ms: int = 0
+    saydi_speed: float = 1.0
 
     @property
     def has_overflow(self) -> bool:
@@ -100,23 +102,29 @@ def build_segment_manifests(
     segment_paths: list[Path],
     plans: list[TimingPlan],
     prepared_cues: list[PreparedVoiceoverCue] | None = None,
+    saydi_speeds: list[float] | None = None,
 ) -> list[SegmentManifest]:
     if not (len(cues) == len(segment_paths) == len(plans)):
         raise ValueError("Cue, segment path, and timing plan lists must align")
     if prepared_cues is not None and len(prepared_cues) != len(cues):
         raise ValueError("Prepared cue list must align with cues")
+    if saydi_speeds is not None and len(saydi_speeds) != len(cues):
+        raise ValueError("Saydi speed list must align with cues")
 
     manifests: list[SegmentManifest] = []
     for idx, (cue, segment_path, plan) in enumerate(zip(cues, segment_paths, plans)):
         prepared = prepared_cues[idx] if prepared_cues is not None else None
-        if plan.overflow_ms > 0:
+        speed = saydi_speeds[idx] if saydi_speeds is not None else 1.0
+        if plan.overflow_ms > 0 or plan.shifted_ms > 0:
             logger.warning(
-                "Cue %s planned as %s; overflow=%sms borrowed=%sms overlap_next=%sms",
+                "Cue %s planned as %s; overflow=%sms borrowed=%sms overlap_next=%sms shifted=%sms speed=%.2f",
                 cue.index,
                 plan.status,
                 plan.overflow_ms,
                 plan.borrowed_gap_after_ms,
                 plan.overlap_next_ms,
+                plan.shifted_ms,
+                speed,
             )
         manifests.append(
             SegmentManifest(
@@ -141,6 +149,8 @@ def build_segment_manifests(
                 borrowed_gap_after_ms=plan.borrowed_gap_after_ms,
                 overlap_next_ms=plan.overlap_next_ms,
                 status=plan.status,
+                shifted_ms=plan.shifted_ms,
+                saydi_speed=speed,
             )
         )
     return manifests
@@ -155,10 +165,14 @@ def build_manifest_summary(plans: list[TimingPlan]) -> dict:
         "cue_count": len(plans),
         "ok_count": sum(1 for item in plans if item.status == "ok"),
         "extended_count": sum(1 for item in plans if item.status == "extended_into_gap"),
+        "shifted_count": sum(1 for item in plans if item.status == "shifted_to_avoid_overlap"),
         "overflow_warning_count": sum(1 for item in plans if item.status == "overflow_warning"),
         "severe_overflow_count": sum(1 for item in plans if item.status == "severe_overflow"),
         "max_overflow_ms": max((item.overflow_ms for item in plans), default=0),
+        "max_shifted_ms": max((item.shifted_ms for item in plans), default=0),
         "total_borrowed_gap_ms": sum(item.borrowed_gap_after_ms for item in plans),
+        "total_shifted_ms": sum(item.shifted_ms for item in plans),
+        "overlap_next_count": sum(1 for item in plans if item.overlap_next_ms > 0),
     }
 
 

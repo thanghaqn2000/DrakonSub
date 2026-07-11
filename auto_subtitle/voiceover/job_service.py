@@ -18,8 +18,10 @@ from .audio_mixer import mix_audio_tracks, mux_video_with_audio, video_has_audio
 from .saydi_tts import load_saydi_config, synthesize_to_file
 from .srt_parser import VoiceoverSrtError, parse_voiceover_srt
 from .text_preparer import (
+    PrepareTextMode,
     prepare_voiceover_cues,
     prepared_to_voiceover_cues,
+    resolve_prepare_text_mode,
     summarize_prepared_cues,
     write_prepared_srt,
 )
@@ -39,6 +41,7 @@ class VoiceoverJobOptions:
     original_volume: float = 0.18
     voice_volume: float = 1.00
     prepare_text: bool = False
+    prepare_text_mode: PrepareTextMode | None = None
     voiceover_topic: str = "catholic"
     max_chars_per_second: float = 13.0
     prepared_srt_output: Path | None = None
@@ -104,21 +107,27 @@ def run_voiceover_job(
     prepared_cues = None
     tts_cues = cues
     prepared_srt_path = None
+    prepare_mode = resolve_prepare_text_mode(
+        prepare_text=options.prepare_text,
+        prepare_text_mode=options.prepare_text_mode,
+    )
     text_summary = {
         "text_ok_count": len(cues),
         "text_shortened_count": 0,
         "text_too_long_count": 0,
+        "text_changed_count": 0,
         "total_original_chars": sum(len(cue.text) for cue in cues),
         "total_prepared_chars": sum(len(cue.text) for cue in cues),
         "average_reduction_ratio": 0.0,
     }
 
-    if options.prepare_text:
+    if prepare_mode != "disabled":
         _report("preparing_text", 15)
         prepared_cues = prepare_voiceover_cues(
             cues,
             topic=options.voiceover_topic,
             max_chars_per_second=options.max_chars_per_second,
+            mode=prepare_mode,
         )
         tts_cues = prepared_to_voiceover_cues(prepared_cues)
         text_summary = summarize_prepared_cues(prepared_cues)
@@ -211,6 +220,7 @@ def run_voiceover_job(
             "original_volume": options.original_volume,
             "voice_volume": options.voice_volume,
             "prepare_text": options.prepare_text,
+            "prepare_text_mode": prepare_mode,
             "voiceover_topic": options.voiceover_topic,
             "max_chars_per_second": options.max_chars_per_second,
             "min_gap_ms": options.min_gap_ms,
@@ -226,10 +236,15 @@ def run_voiceover_job(
         "tts_output_format": saydi_config.output_format,
         "video_duration_ms": video_duration_ms,
         "has_original_audio": has_original_audio,
+        "source_srt_used_for_tts": str(voiceover_srt.resolve()),
         "text_preparation": {
-            "enabled": options.prepare_text,
+            "enabled": prepare_mode != "disabled",
+            "prepare_text_mode": prepare_mode,
             "topic": options.voiceover_topic,
             "max_chars_per_second": options.max_chars_per_second,
+            "text_changed_count": text_summary.get("text_changed_count", 0),
+            "text_shortened_count": text_summary.get("text_shortened_count", 0),
+            "text_too_long_count": text_summary.get("text_too_long_count", 0),
             **({"prepared_srt_output": str(prepared_srt_path.resolve())} if prepared_srt_path else {}),
         },
         "timing_config": {

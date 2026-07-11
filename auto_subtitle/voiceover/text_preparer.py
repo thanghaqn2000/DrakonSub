@@ -1,17 +1,27 @@
+"""Prepare voiceover cue text before TTS.
+
+Default mode is ``safe``: normalize whitespace/punctuation only.
+Destructive CPS-based shortening is ``aggressive`` and must not be used
+by the default UI render path.
+"""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 from auto_subtitle.translation_topics import normalize_topic
 
 from .srt_parser import VoiceoverCue
 
+PrepareTextMode = Literal["safe", "disabled", "aggressive"]
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"([.!?,;:])\1+")
 _CLAUSE_SPLIT_RE = re.compile(r"\s*,\s*|\s*;\s*|\s*:\s*")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 _CATHOLIC_TERMS = (
     "Chúa Giêsu Kitô",
@@ -33,6 +43,8 @@ _CATHOLIC_TERMS = (
     "lời cầu nguyện",
 )
 
+DEFAULT_PREPARE_TEXT_MODE: PrepareTextMode = "safe"
+
 
 @dataclass(frozen=True)
 class PreparedVoiceoverCue:
@@ -49,8 +61,28 @@ class PreparedVoiceoverCue:
     warnings: list[str]
 
 
+def resolve_prepare_text_mode(
+    *,
+    prepare_text: bool,
+    prepare_text_mode: PrepareTextMode | None = None,
+) -> PrepareTextMode:
+    """Map legacy prepare_text flag to an explicit mode.
+
+    ``prepare_text=True`` defaults to safe (non-destructive).
+    Aggressive shortening is never implied by the boolean alone.
+    """
+    if prepare_text_mode is not None:
+        return prepare_text_mode
+    if not prepare_text:
+        return "disabled"
+    return DEFAULT_PREPARE_TEXT_MODE
+
+
 def _normalize_text(text: str) -> str:
     value = (text or "").strip()
+    value = _CONTROL_CHARS_RE.sub("", value)
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    value = value.replace("\n", " ")
     value = _WHITESPACE_RE.sub(" ", value)
     value = _PUNCT_RE.sub(r"\1", value)
     value = value.replace("...", ".")
@@ -73,6 +105,7 @@ def _prefer_shorter_form(text: str) -> str:
 
 
 def _shorten_text(text: str, target_char_count: int) -> tuple[str, list[str]]:
+    """Destructive CPS shortening — aggressive mode only."""
     warnings: list[str] = []
     normalized = _prefer_shorter_form(text)
     if len(normalized) <= target_char_count:
@@ -104,8 +137,27 @@ def prepare_voiceover_cues(
     *,
     topic: str = "catholic",
     max_chars_per_second: float = 13.0,
+    mode: PrepareTextMode = DEFAULT_PREPARE_TEXT_MODE,
 ) -> list[PreparedVoiceoverCue]:
     normalize_topic(topic)
+    if mode == "disabled":
+        return [
+            PreparedVoiceoverCue(
+                index=cue.index,
+                start_ms=cue.start_ms,
+                end_ms=cue.end_ms,
+                original_text=cue.text,
+                prepared_text=cue.text,
+                original_char_count=len(cue.text.strip()),
+                prepared_char_count=len(cue.text.strip()),
+                target_char_count=max(20, int((cue.duration_ms / 1000.0) * max_chars_per_second)),
+                reduction_ratio=0.0,
+                status="ok",
+                warnings=[],
+            )
+            for cue in cues
+        ]
+
     prepared: list[PreparedVoiceoverCue] = []
     for cue in cues:
         original_text = _normalize_text(cue.text)
@@ -128,39 +180,43 @@ def prepare_voiceover_cues(
             )
             continue
 
-        if len(original_text) <= target_char_count:
-            prepared.append(
-                PreparedVoiceoverCue(
-                    index=cue.index,
-                    start_ms=cue.start_ms,
-                    end_ms=cue.end_ms,
-                    original_text=original_text,
-                    prepared_text=original_text,
-                    original_char_count=len(original_text),
-                    prepared_char_count=len(original_text),
-                    target_char_count=target_char_count,
-                    reduction_ratio=0.0,
-                    status="ok",
-                    warnings=[],
-                )
-            )
-            continue
-
-        shortened_text, warnings = _shorten_text(original_text, target_char_count)
-        original_char_count = len(original_text)
-        prepared_char_count = len(shortened_text)
-        reduction_ratio = 0.0 if original_char_count == 0 else max(
-            0.0, (original_char_count - prepared_char_count) / original_char_count
-        )
-
-        if prepared_char_count > target_char_count:
-            status = "too_long"
-            if "text_exceeds_target_after_preparation" not in warnings:
-                warnings.append("text_exceeds_target_after_preparation")
-        elif prepared_char_count < original_char_count:
-            status = "shortened"
+        if mode == "safe":
+            prepared_text = original_text
+            warnings: list[str] = []
+            if len(prepared_text) > target_char_count:
+                status = "too_long"
+                warnings.append("text_exceeds_cps_budget_preserved")
+            else:
+                status = "ok"
+            original_char_count = len(original_text)
+            prepared_char_count = len(prepared_text)
+            reduction_ratio = 0.0
         else:
-            status = "ok"
+            # aggressive
+            if len(original_text) <= target_char_count:
+                prepared_text = original_text
+                warnings = []
+                status = "ok"
+                original_char_count = len(original_text)
+                prepared_char_count = len(prepared_text)
+                reduction_ratio = 0.0
+            else:
+                prepared_text, warnings = _shorten_text(original_text, target_char_count)
+                original_char_count = len(original_text)
+                prepared_char_count = len(prepared_text)
+                reduction_ratio = (
+                    0.0
+                    if original_char_count == 0
+                    else max(0.0, (original_char_count - prepared_char_count) / original_char_count)
+                )
+                if prepared_char_count > target_char_count:
+                    status = "too_long"
+                    if "text_exceeds_target_after_preparation" not in warnings:
+                        warnings.append("text_exceeds_target_after_preparation")
+                elif prepared_char_count < original_char_count:
+                    status = "shortened"
+                else:
+                    status = "ok"
 
         prepared.append(
             PreparedVoiceoverCue(
@@ -168,7 +224,7 @@ def prepare_voiceover_cues(
                 start_ms=cue.start_ms,
                 end_ms=cue.end_ms,
                 original_text=original_text,
-                prepared_text=shortened_text,
+                prepared_text=prepared_text,
                 original_char_count=original_char_count,
                 prepared_char_count=prepared_char_count,
                 target_char_count=target_char_count,
@@ -182,10 +238,14 @@ def prepare_voiceover_cues(
 
 def summarize_prepared_cues(cues: Iterable[PreparedVoiceoverCue]) -> dict:
     items = list(cues)
+    text_changed_count = sum(
+        1 for item in items if (item.original_text or "").strip() != (item.prepared_text or "").strip()
+    )
     return {
         "text_ok_count": sum(1 for item in items if item.status == "ok"),
         "text_shortened_count": sum(1 for item in items if item.status == "shortened"),
         "text_too_long_count": sum(1 for item in items if item.status == "too_long"),
+        "text_changed_count": text_changed_count,
         "total_original_chars": sum(item.original_char_count for item in items),
         "total_prepared_chars": sum(item.prepared_char_count for item in items),
         "average_reduction_ratio": (

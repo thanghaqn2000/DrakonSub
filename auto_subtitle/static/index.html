@@ -961,6 +961,22 @@
             <input type="file" id="voiceover-video-input" accept="video/*" />
           </div>
 
+          <div class="url-import" id="voiceover-url-import">
+            <h3>Hoặc dán link YouTube / Facebook</h3>
+            <div class="url-import-row">
+              <input
+                type="url"
+                id="voiceover-url-input"
+                placeholder="https://www.youtube.com/watch?v=... hoặc Facebook"
+              />
+              <button class="btn-primary" type="button" id="voiceover-url-process-btn">Xử lí</button>
+            </div>
+            <p class="url-import-note">
+              Hệ thống tự nhận diện YouTube hoặc Facebook. Chỉ dùng video công khai.
+              Sau khi tải xong sẽ tự tạo lời thuyết minh theo chủ đề bên dưới.
+            </p>
+          </div>
+
           <div class="field-row">
             <div class="field" style="margin-top:0">
               <label for="voiceover-topic">Chủ đề</label>
@@ -1193,6 +1209,8 @@
     const subtitleSourceLabel = document.getElementById("subtitle-source-label");
     const subtitleModalStatus = document.getElementById("subtitle-modal-status");
     const voiceoverVideoInput = document.getElementById("voiceover-video-input");
+    const voiceoverUrlInput = document.getElementById("voiceover-url-input");
+    const voiceoverUrlProcessBtn = document.getElementById("voiceover-url-process-btn");
     const voiceoverPrepareText = document.getElementById("voiceover-prepare-text");
     const voiceoverTopic = document.getElementById("voiceover-topic");
     const voiceoverSaydiSample = document.getElementById("voiceover-saydi-sample");
@@ -1353,7 +1371,11 @@
 
     function updateVoiceoverButtonState() {
       const busy = voiceoverScriptPolling || voiceoverRenderPolling;
+      const hasUrl = !!(voiceoverUrlInput && voiceoverUrlInput.value.trim());
       voiceoverScriptBtn.disabled = busy || !voiceoverSelectedVideo || !!voiceoverScriptJobId;
+      if (voiceoverUrlProcessBtn) {
+        voiceoverUrlProcessBtn.disabled = busy || !hasUrl || !!voiceoverScriptJobId;
+      }
       voiceoverSaveCuesBtn.disabled = busy || !voiceoverScriptJobId || !voiceoverScriptCues.length;
       voiceoverRenderBtn.disabled = busy || !voiceoverScriptJobId || voiceoverScriptCues.length === 0;
     }
@@ -1375,6 +1397,8 @@
       if (status === "failed") return "Không tạo được video thuyết minh.";
       if (status === "script_ready") return "Đã sẵn sàng chỉnh sửa lời thuyết minh.";
       switch (stage) {
+        case "downloading":
+          return "Đang tải video từ link...";
         case "queued":
         case "starting":
           return "Đang chuẩn bị...";
@@ -1653,6 +1677,53 @@
       }
     }
 
+    async function startVoiceoverScriptJobFromUrl() {
+      const url = (voiceoverUrlInput?.value || "").trim();
+      if (!url) {
+        showVoiceoverError("Vui lòng dán link YouTube hoặc Facebook.");
+        return;
+      }
+
+      clearVoiceoverError();
+      clearVoiceoverSuccess();
+      resetVoiceoverOutput();
+      resetVoiceoverFlow();
+      stopVoiceoverPolling();
+
+      voiceoverScriptPolling = true;
+      updateVoiceoverButtonState();
+      voiceoverProgressWrap.classList.add("visible");
+      voiceoverProgressFill.style.width = "0%";
+      voiceoverProgressText.textContent = "Đang tải video từ link...";
+
+      try {
+        const res = await fetch("/api/voiceover/script-jobs/from-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url,
+            voiceover_topic: voiceoverTopic.value,
+            max_chars_per_second: Number(voiceoverMaxCps.value),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const detail = data.detail;
+          const message = Array.isArray(detail)
+            ? detail.map((item) => item.msg || item).join(", ")
+            : (detail || "Không tạo được lời thuyết minh từ link.");
+          throw new Error(message);
+        }
+        if (!data.job_id) throw new Error("Không tạo được lời thuyết minh từ link.");
+        voiceoverScriptJobId = data.job_id;
+        beginVoiceoverScriptPolling(data.job_id, "script");
+      } catch (err) {
+        stopVoiceoverPolling();
+        resetVoiceoverFlow();
+        showVoiceoverError(err.message || "Không tạo được lời thuyết minh từ link.");
+      }
+    }
+
     async function startVoiceoverRenderJob() {
       const validationError = validateVoiceoverRenderInputs();
       if (validationError) {
@@ -1732,6 +1803,23 @@
       stopVoiceoverPolling();
       updateVoiceoverButtonState();
     });
+
+    if (voiceoverUrlInput) {
+      voiceoverUrlInput.addEventListener("input", () => {
+        updateVoiceoverButtonState();
+      });
+      voiceoverUrlInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          startVoiceoverScriptJobFromUrl();
+        }
+      });
+    }
+    if (voiceoverUrlProcessBtn) {
+      voiceoverUrlProcessBtn.addEventListener("click", () => {
+        startVoiceoverScriptJobFromUrl();
+      });
+    }
 
     layoutControls.textColorPicker.addEventListener("input", () => {
       layoutControls.textColor.value = layoutControls.textColorPicker.value.toUpperCase();

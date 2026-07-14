@@ -1903,6 +1903,7 @@
     const srtAudioPlayer = document.getElementById("srt-audio-player");
     const srtAudioErrorBox = document.getElementById("srt-audio-error-box");
     const srtAudioSuccessBox = document.getElementById("srt-audio-success-box");
+    const srtAudioProgressWrap = document.getElementById("srt-audio-progress-wrap");
     const srtAudioProgressFill = document.getElementById("srt-audio-progress-fill");
     const srtAudioProgressText = document.getElementById("srt-audio-progress-text");
     let srtAudioJobId = null;
@@ -2109,22 +2110,40 @@
         srtAudioPollTimer = null;
       }
     }
+    function showSrtAudioProgress(percent, text) {
+      if (srtAudioProgressWrap) srtAudioProgressWrap.classList.add("visible");
+      if (srtAudioProgressFill) srtAudioProgressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      if (srtAudioProgressText) srtAudioProgressText.textContent = text || "Đang xử lý…";
+    }
+
+    function hideSrtAudioProgress() {
+      if (srtAudioProgressWrap) srtAudioProgressWrap.classList.remove("visible");
+      if (srtAudioProgressFill) srtAudioProgressFill.style.width = "0%";
+      if (srtAudioProgressText) srtAudioProgressText.textContent = "Đang chờ...";
+    }
+
     function beginSrtAudioPolling(jobId) {
       stopSrtAudioPolling();
+      showSrtAudioProgress(20, "Đã xếp hàng tạo audio…");
       srtAudioPollTimer = setInterval(async () => {
         try {
           const res = await fetch(`/api/srt-audio/jobs/${jobId}`);
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Poll thất bại.");
-          const pct = data.progress_percent || 0;
-          if (srtAudioProgressFill) srtAudioProgressFill.style.width = `${pct}%`;
-          if (srtAudioProgressText) {
-            srtAudioProgressText.textContent = data.status === "processing"
-              ? `Đang tạo audio… (${pct}%)`
-              : (data.stage || data.status || "");
+          const pct = Number(data.progress_percent || 0);
+          const stageLabel = ({
+            queued: "Đã xếp hàng…",
+            synthesizing: "Đang gọi Saydi và ghép audio…",
+            processing: "Đang tạo audio…",
+            completed: "Hoàn tất",
+            failed: "Thất bại",
+          })[data.stage] || data.stage || data.status || "Đang xử lý…";
+          if (data.status === "processing") {
+            showSrtAudioProgress(Math.max(pct, 20), `${stageLabel} (${pct}%)`);
           }
           if (data.status === "completed") {
             stopSrtAudioPolling();
+            showSrtAudioProgress(100, "Đã tạo xong audio thuyết minh.");
             const fmt = srtAudioFormat?.value || data.output_format || "wav";
             const url = `/api/srt-audio/jobs/${jobId}/audio?format=${encodeURIComponent(fmt)}&t=${Date.now()}`;
             if (srtAudioPlayer) {
@@ -2140,6 +2159,7 @@
             showSrtAudioSuccess("Đã tạo audio thuyết minh.");
           } else if (data.status === "failed") {
             stopSrtAudioPolling();
+            showSrtAudioProgress(pct || 100, "Không tạo được audio.");
             if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = false;
             showSrtAudioError(data.error || "Không tạo được audio.");
           }
@@ -2155,6 +2175,7 @@
         if (!srtAudioJobId) return;
         clearSrtAudioError();
         srtAudioSynthesizeBtn.disabled = true;
+        showSrtAudioProgress(5, "Đang lưu chỉnh sửa…");
         try {
           // Auto-save current editor values first
           const saveRes = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/cues`, {
@@ -2170,11 +2191,13 @@
           renderSrtAudioCues(saveData.cues || []);
           if (saveData.has_blocking_issues) {
             updateSrtAudioSynthesizeEnabled(true);
+            hideSrtAudioProgress();
             throw new Error("Còn lỗi timing (trống/chồng cue/timestamp). Sửa trước khi thuyết minh.");
           }
           if (saveData.has_warning_issues) {
             showSrtAudioSuccess("Có cảnh báo text dài hơn slot — vẫn tiếp tục tạo audio.");
           }
+          showSrtAudioProgress(15, "Đang bắt đầu tạo audio…");
           const res = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/synthesize`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2186,8 +2209,6 @@
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Không bắt đầu thuyết minh.");
-          if (srtAudioProgressFill) srtAudioProgressFill.style.width = "20%";
-          if (srtAudioProgressText) srtAudioProgressText.textContent = "Đang tạo audio…";
           beginSrtAudioPolling(srtAudioJobId);
         } catch (err) {
           srtAudioSynthesizeBtn.disabled = false;

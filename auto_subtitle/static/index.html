@@ -1120,16 +1120,26 @@
     <div class="mode-panel" id="srt-audio-panel">
       <section class="controls">
         <p class="voiceover-description">
-          Upload file SRT, chỉnh text/timestamp, rồi tạo audio thuyết minh bằng Saydi (không cần video).
+          Upload file SRT hoặc dán nội dung SRT, chỉnh text/timestamp, rồi tạo audio thuyết minh bằng Saydi (không cần video).
         </p>
 
         <div id="srt-audio-step1">
           <div class="field">
-            <label for="srt-audio-file-input">File SRT</label>
+            <label for="srt-audio-file-input">Upload file SRT</label>
             <input type="file" id="srt-audio-file-input" accept=".srt,application/x-subrip,text/plain" />
           </div>
+          <div class="field">
+            <label for="srt-audio-paste-input">Hoặc dán nội dung SRT</label>
+            <textarea
+              id="srt-audio-paste-input"
+              rows="10"
+              placeholder="1&#10;00:00:00,000 --> 00:00:02,000&#10;Nội dung câu thoại..."
+              style="width:100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem;"
+            ></textarea>
+            <p class="field-hint">Nếu dán nội dung, tool ưu tiên nội dung đã dán hơn file đã chọn.</p>
+          </div>
           <div class="actions">
-            <button class="btn-primary" id="srt-audio-upload-btn" disabled>Tải SRT lên</button>
+            <button class="btn-primary" id="srt-audio-upload-btn" disabled>Tiếp tục với SRT này</button>
           </div>
         </div>
 
@@ -1879,6 +1889,7 @@
 
     // --- SRT → Audio ---
     const srtAudioFileInput = document.getElementById("srt-audio-file-input");
+    const srtAudioPasteInput = document.getElementById("srt-audio-paste-input");
     const srtAudioUploadBtn = document.getElementById("srt-audio-upload-btn");
     const srtAudioStep2 = document.getElementById("srt-audio-step2");
     const srtAudioStep3 = document.getElementById("srt-audio-step3");
@@ -1898,6 +1909,65 @@
     let srtAudioCues = [];
     let srtAudioPollTimer = null;
     let srtAudioSelectedFile = null;
+
+    function updateSrtAudioUploadEnabled() {
+      const hasPaste = !!(srtAudioPasteInput && srtAudioPasteInput.value.trim());
+      const hasFile = !!srtAudioSelectedFile;
+      if (srtAudioUploadBtn) srtAudioUploadBtn.disabled = !(hasPaste || hasFile);
+    }
+
+    async function submitSrtAudioSource() {
+      clearSrtAudioError();
+      const pasted = (srtAudioPasteInput?.value || "").trim();
+      const fd = new FormData();
+      if (pasted) {
+        const blob = new Blob([pasted + (pasted.endsWith("\n") ? "" : "\n")], {
+          type: "application/x-subrip",
+        });
+        fd.append("srt_file", new File([blob], "pasted.srt", { type: "application/x-subrip" }));
+      } else if (srtAudioSelectedFile) {
+        fd.append("srt_file", srtAudioSelectedFile);
+      } else {
+        showSrtAudioError("Hãy chọn file SRT hoặc dán nội dung SRT.");
+        return;
+      }
+      try {
+        const res = await fetch("/api/srt-audio/jobs", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Không xử lý được SRT.");
+        srtAudioJobId = data.job_id;
+        srtAudioStep2?.classList.remove("hidden");
+        srtAudioStep3?.classList.remove("hidden");
+        if (srtAudioPlayer) {
+          srtAudioPlayer.hidden = true;
+          srtAudioPlayer.removeAttribute("src");
+        }
+        if (srtAudioDownloadBtn) srtAudioDownloadBtn.hidden = true;
+        await refreshSrtAudioCues();
+        showSrtAudioSuccess(
+          pasted
+            ? "Đã nhận nội dung SRT đã dán. Chỉnh sửa rồi bấm Thuyết minh."
+            : "Đã tải SRT. Chỉnh sửa rồi bấm Thuyết minh."
+        );
+      } catch (err) {
+        showSrtAudioError(err.message || "Không xử lý được SRT.");
+      }
+    }
+
+    if (srtAudioFileInput) {
+      srtAudioFileInput.addEventListener("change", () => {
+        srtAudioSelectedFile = srtAudioFileInput.files?.[0] || null;
+        updateSrtAudioUploadEnabled();
+      });
+    }
+    if (srtAudioPasteInput) {
+      srtAudioPasteInput.addEventListener("input", updateSrtAudioUploadEnabled);
+    }
+    if (srtAudioUploadBtn) {
+      srtAudioUploadBtn.addEventListener("click", () => {
+        submitSrtAudioSource();
+      });
+    }
 
     function showSrtAudioError(msg) {
       if (!srtAudioErrorBox) return;
@@ -1980,37 +2050,6 @@
       if (!res.ok) throw new Error(data.detail || "Không tải được cues.");
       renderSrtAudioCues(data.cues || []);
       updateSrtAudioSynthesizeEnabled(!!data.has_blocking_issues);
-    }
-    if (srtAudioFileInput) {
-      srtAudioFileInput.addEventListener("change", () => {
-        srtAudioSelectedFile = srtAudioFileInput.files?.[0] || null;
-        if (srtAudioUploadBtn) srtAudioUploadBtn.disabled = !srtAudioSelectedFile;
-      });
-    }
-    if (srtAudioUploadBtn) {
-      srtAudioUploadBtn.addEventListener("click", async () => {
-        if (!srtAudioSelectedFile) return;
-        clearSrtAudioError();
-        const fd = new FormData();
-        fd.append("srt_file", srtAudioSelectedFile);
-        try {
-          const res = await fetch("/api/srt-audio/jobs", { method: "POST", body: fd });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || "Upload SRT thất bại.");
-          srtAudioJobId = data.job_id;
-          srtAudioStep2?.classList.remove("hidden");
-          srtAudioStep3?.classList.remove("hidden");
-          if (srtAudioPlayer) {
-            srtAudioPlayer.hidden = true;
-            srtAudioPlayer.removeAttribute("src");
-          }
-          if (srtAudioDownloadBtn) srtAudioDownloadBtn.hidden = true;
-          await refreshSrtAudioCues();
-          showSrtAudioSuccess("Đã tải SRT. Chỉnh sửa rồi bấm Thuyết minh.");
-        } catch (err) {
-          showSrtAudioError(err.message || "Upload SRT thất bại.");
-        }
-      });
     }
     if (srtAudioSaveCuesBtn) {
       srtAudioSaveCuesBtn.addEventListener("click", async () => {

@@ -10,6 +10,7 @@ from auto_subtitle.srt_audio.timing import (  # noqa: E402
     estimate_speech_ms,
     ms_to_srt_timestamp,
     parse_srt_timestamp_to_ms,
+    plan_cascade_starts,
     validate_cue_timings,
 )
 
@@ -37,6 +38,36 @@ class SrtAudioTimingTests(unittest.TestCase):
         self.assertIn("too_long", issues[0])
         self.assertIn("start_after_end", issues[2])
         self.assertIn("empty_text", issues[2])
+
+
+class CascadePlacementTests(unittest.TestCase):
+    def test_respects_intent_when_gap_available(self) -> None:
+        starts = plan_cascade_starts(
+            intent_starts_ms=[0, 4000],
+            durations_ms=[3000, 1000],
+            gap_ms=280,
+        )
+        self.assertEqual(starts, [0, 4000])
+
+    def test_pushes_next_when_overflow(self) -> None:
+        starts = plan_cascade_starts(
+            intent_starts_ms=[0, 3000],
+            durations_ms=[5000, 2000],
+            gap_ms=280,
+        )
+        self.assertEqual(starts, [0, 5280])
+
+    def test_cascade_chain(self) -> None:
+        starts = plan_cascade_starts(
+            intent_starts_ms=[3000, 11000, 17000],
+            durations_ms=[9000, 7000, 1000],
+            gap_ms=280,
+        )
+        self.assertEqual(starts, [3000, 12280, 19560])
+
+    def test_length_mismatch_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            plan_cascade_starts([0], [1, 2], gap_ms=280)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,30 @@ def ms_to_srt_timestamp(value: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
+def plan_cascade_starts(
+    intent_starts_ms: list[int],
+    durations_ms: list[int],
+    *,
+    gap_ms: int = 280,
+) -> list[int]:
+    if len(intent_starts_ms) != len(durations_ms):
+        raise ValueError("intent_starts_ms and durations_ms length mismatch")
+    if gap_ms < 0:
+        raise ValueError("gap_ms must be >= 0")
+    planned: list[int] = []
+    prev_end: int | None = None
+    for intent, duration in zip(intent_starts_ms, durations_ms):
+        intent_i = max(0, int(intent))
+        dur_i = max(0, int(duration))
+        if prev_end is None:
+            start = intent_i
+        else:
+            start = max(intent_i, prev_end + int(gap_ms))
+        planned.append(start)
+        prev_end = start + dur_i
+    return planned
+
+
 def estimate_speech_ms(
     text: str,
     *,

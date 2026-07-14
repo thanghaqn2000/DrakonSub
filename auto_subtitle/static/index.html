@@ -1145,7 +1145,7 @@
 
         <div id="srt-audio-step2" class="hidden">
           <h3>Chỉnh sửa cue</h3>
-          <p class="field-hint">Chỉ sửa text và timestamp. Cue quá dài hoặc chồng thời gian sẽ được tô đỏ — phải sửa trước khi thuyết minh.</p>
+          <p class="field-hint">Chỉ sửa text và timestamp. Cue chồng/sai timestamp sẽ chặn thuyết minh. Cue text dài hơn slot chỉ cảnh báo — vẫn tạo được.</p>
           <div id="srt-audio-cue-editor" class="subtitle-modal-body" style="max-height: 420px; padding: 0; margin: 0.75rem 0;"></div>
           <div class="actions">
             <button class="btn-secondary" id="srt-audio-save-cues-btn" disabled>Lưu chỉnh sửa</button>
@@ -1994,10 +1994,23 @@
         empty_text: "Trống",
         start_after_end: "Start ≥ end",
         overlap_next: "Chồng cue sau",
-        too_long: "Text dài hơn slot",
+        too_long: "Text dài hơn slot (cảnh báo)",
         invalid_timestamp: "Timestamp sai",
       };
       return map[code] || code;
+    }
+    const SRT_AUDIO_BLOCKING_ISSUES = new Set([
+      "empty_text",
+      "start_after_end",
+      "overlap_next",
+      "invalid_timestamp",
+    ]);
+    function cueHasBlockingIssues(cue) {
+      return (cue.issues || []).some((code) => SRT_AUDIO_BLOCKING_ISSUES.has(code));
+    }
+    function cueHasWarningOnly(cue) {
+      const issues = cue.issues || [];
+      return issues.length > 0 && !cueHasBlockingIssues(cue);
     }
     function renderSrtAudioCues(rows) {
       srtAudioCues = rows || [];
@@ -2007,13 +2020,18 @@
         return;
       }
       srtAudioCueEditor.innerHTML = srtAudioCues.map((cue) => {
-        const bad = (cue.issues || []).length > 0;
+        const blocking = cueHasBlockingIssues(cue);
+        const warningOnly = cueHasWarningOnly(cue);
+        const outline = blocking
+          ? "outline:1px solid #c0392b;border-radius:8px;padding:0.35rem;"
+          : (warningOnly ? "outline:1px solid #d68910;border-radius:8px;padding:0.35rem;" : "");
+        const issueColor = blocking ? "#c0392b" : "#d68910";
         const issueText = (cue.issues || []).map(issueLabel).join(", ");
         return `
-          <div class="subtitle-row" data-index="${cue.index}" style="${bad ? "outline:1px solid #c0392b;border-radius:8px;padding:0.35rem;" : ""}">
+          <div class="subtitle-row" data-index="${cue.index}" style="${outline}">
             <div class="subtitle-row-meta">
               <strong>#${cue.index}</strong>
-              ${bad ? `<span style="color:#c0392b;font-size:0.85em;">${escapeHtml(issueText)}</span>` : ""}
+              ${issueText ? `<span style="color:${issueColor};font-size:0.85em;">${escapeHtml(issueText)}</span>` : ""}
               <span style="opacity:0.7;font-size:0.85em;">ước lượng ${cue.estimated_ms || 0}ms</span>
             </div>
             <div class="field-row">
@@ -2023,7 +2041,7 @@
             <textarea class="srt-audio-text" data-index="${cue.index}" rows="2">${escapeHtml(cue.text || "")}</textarea>
           </div>`;
       }).join("");
-      updateSrtAudioSynthesizeEnabled(srtAudioCues.some((c) => (c.issues || []).length > 0));
+      updateSrtAudioSynthesizeEnabled(srtAudioCues.some((c) => cueHasBlockingIssues(c)));
     }
     function collectSrtAudioCuesFromEditor() {
       return srtAudioCues.map((cue) => {
@@ -2068,9 +2086,13 @@
           if (!res.ok) throw new Error(data.detail || "Lưu cues thất bại.");
           renderSrtAudioCues(data.cues || []);
           updateSrtAudioSynthesizeEnabled(!!data.has_blocking_issues);
-          showSrtAudioSuccess(data.has_blocking_issues
-            ? "Đã lưu. Vẫn còn cue lỗi — sửa trước khi thuyết minh."
-            : "Đã lưu chỉnh sửa.");
+          showSrtAudioSuccess(
+            data.has_blocking_issues
+              ? "Đã lưu. Vẫn còn lỗi timing — sửa trước khi thuyết minh."
+              : (data.has_warning_issues
+                ? "Đã lưu. Có cảnh báo text dài hơn slot — vẫn có thể thuyết minh."
+                : "Đã lưu chỉnh sửa.")
+          );
         } catch (err) {
           showSrtAudioError(err.message || "Lưu cues thất bại.");
         }
@@ -2148,7 +2170,10 @@
           renderSrtAudioCues(saveData.cues || []);
           if (saveData.has_blocking_issues) {
             updateSrtAudioSynthesizeEnabled(true);
-            throw new Error("Còn cue lỗi. Sửa timestamp/text trước khi thuyết minh.");
+            throw new Error("Còn lỗi timing (trống/chồng cue/timestamp). Sửa trước khi thuyết minh.");
+          }
+          if (saveData.has_warning_issues) {
+            showSrtAudioSuccess("Có cảnh báo text dài hơn slot — vẫn tiếp tục tạo audio.");
           }
           const res = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/synthesize`, {
             method: "POST",

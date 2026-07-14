@@ -44,7 +44,7 @@ class SrtAudioWebTests(unittest.TestCase):
         self.assertEqual(len(body["cues"]), 1)
         self.assertFalse(body["has_blocking_issues"])
 
-    def test_put_cues_and_reject_bad_synthesize(self) -> None:
+    def test_put_too_long_is_warning_not_blocking(self) -> None:
         data = self._create_job()
         job_id = data["job_id"]
         put = self.client.put(
@@ -62,7 +62,34 @@ class SrtAudioWebTests(unittest.TestCase):
             },
         )
         self.assertEqual(put.status_code, 200)
-        self.assertTrue(put.json()["has_blocking_issues"])
+        body = put.json()
+        self.assertFalse(body["has_blocking_issues"])
+        self.assertTrue(body["has_warning_issues"])
+        self.assertIn("too_long", body["cues"][0]["issues"])
+
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_synthesize_allows_too_long_warning(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
+        data = self._create_job(
+            ("1\n00:00:00,000 --> 00:00:01,000\n" + ("dai " * 40) + "\n").encode("utf-8")
+        )
+        job_id = data["job_id"]
+        synth = self.client.post(
+            f"/api/srt-audio/jobs/{job_id}/synthesize",
+            json={"output_format": "wav", "saydi_speed": 1.0},
+        )
+        self.assertEqual(synth.status_code, 200, synth.text)
+        self.assertEqual(synth.json()["status"], "processing")
+        mock_thread.assert_called_once()
+
+    def test_synthesize_rejects_overlap(self) -> None:
+        data = self._create_job(
+            (
+                "1\n00:00:00,000 --> 00:00:01,500\nok\n\n"
+                "2\n00:00:01,000 --> 00:00:02,000\nok\n"
+            ).encode("utf-8")
+        )
+        job_id = data["job_id"]
         synth = self.client.post(
             f"/api/srt-audio/jobs/{job_id}/synthesize",
             json={"output_format": "wav", "saydi_speed": 1.0},

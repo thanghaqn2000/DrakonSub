@@ -28,12 +28,54 @@ class SrtAudioJobServiceTests(unittest.TestCase):
             self.assertEqual(meta["cue_count"], 1)
             self.assertEqual(job_id, job_dir.name)
 
-    def test_synthesize_rejects_too_long_before_saydi(self) -> None:
+    def test_synthesize_allows_too_long_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             srt = ("1\n00:00:00,000 --> 00:00:01,000\n" + ("dai " * 40) + "\n").encode(
                 "utf-8"
             )
+            _, job_dir = create_job_from_srt_bytes(root, srt)
+            with patch("auto_subtitle.srt_audio.job_service.convert_wav_to_mp3"):
+                with patch("auto_subtitle.srt_audio.job_service.build_srt_audio_track") as mock_build:
+                    with patch(
+                        "auto_subtitle.srt_audio.job_service.probe_audio_duration_ms",
+                        return_value=800,
+                    ):
+                        with patch("auto_subtitle.srt_audio.job_service.synthesize_to_file") as mock_tts:
+                            with patch(
+                                "auto_subtitle.srt_audio.job_service.load_saydi_config",
+                                return_value=type(
+                                    "Cfg",
+                                    (),
+                                    {
+                                        "token": "x",
+                                        "sample": "s",
+                                        "speed": 1.0,
+                                        "lang": "vi",
+                                        "output_format": "wav",
+                                    },
+                                )(),
+                            ):
+                                mock_build.side_effect = (
+                                    lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"RIFF")
+                                )
+                                result = run_synthesize_job(
+                                    job_dir,
+                                    saydi_sample=None,
+                                    saydi_speed=1.0,
+                                    output_format="wav",
+                                    chars_per_second=13.0,
+                                )
+                                mock_tts.assert_called_once()
+                                self.assertTrue(Path(result["output_wav"]).is_file())
+
+    def test_synthesize_rejects_overlap_before_saydi(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt = (
+                "1\n00:00:00,000 --> 00:00:01,500\nok\n\n"
+                "2\n00:00:01,000 --> 00:00:02,000\nok\n"
+            ).encode("utf-8")
             _, job_dir = create_job_from_srt_bytes(root, srt)
             with patch("auto_subtitle.srt_audio.job_service.synthesize_to_file") as mock_tts:
                 with self.assertRaises(SrtAudioJobError):

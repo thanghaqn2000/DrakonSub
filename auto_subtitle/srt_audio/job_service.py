@@ -86,7 +86,7 @@ def run_synthesize_job(
     rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed)
     if has_blocking_issues(rows):
         raise SrtAudioJobError(
-            "SRT còn lỗi timing/độ dài. Hãy sửa timestamp hoặc rút gọn text trước khi thuyết minh."
+            "SRT còn lỗi timing (trống, chồng cue, timestamp sai). Hãy sửa trước khi thuyết minh."
         )
 
     saydi_config = load_saydi_config(

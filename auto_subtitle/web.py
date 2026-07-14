@@ -85,6 +85,8 @@ from .voiceover.script_job import (
 from .srt_audio.cue_service import (
     SrtAudioCueError,
     annotate_cues,
+    has_blocking_issues,
+    has_warning_issues,
     load_effective_cues,
     save_edited_cues as save_srt_audio_cues,
 )
@@ -2073,7 +2075,8 @@ def get_srt_audio_cues(
         "chars_per_second": cps,
         "saydi_speed": float(saydi_speed),
         "cues": rows,
-        "has_blocking_issues": any(row.get("issues") for row in rows),
+        "has_blocking_issues": has_blocking_issues(rows),
+        "has_warning_issues": has_warning_issues(rows),
     }
 
 
@@ -2105,7 +2108,8 @@ def put_srt_audio_cues(job_id: str, body: dict = Body(default_factory=dict)):
         "job_id": job_id,
         "cue_count": len(saved),
         "cues": rows,
-        "has_blocking_issues": any(row.get("issues") for row in rows),
+        "has_blocking_issues": has_blocking_issues(rows),
+        "has_warning_issues": has_warning_issues(rows),
         "message": "Đã lưu chỉnh sửa SRT.",
     }
 
@@ -2134,10 +2138,10 @@ def synthesize_srt_audio_job(job_id: str, body: dict = Body(default_factory=dict
     speed_for_check = float(saydi_speed) if saydi_speed is not None else 1.0
     cues = load_effective_cues(_srt_audio_job_dir(job_id))
     rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed_for_check)
-    if any(row.get("issues") for row in rows):
+    if has_blocking_issues(rows):
         raise HTTPException(
             400,
-            "SRT còn lỗi timing/độ dài. Hãy sửa timestamp hoặc rút gọn text trước khi thuyết minh.",
+            "SRT còn lỗi timing (trống, chồng cue, timestamp sai). Hãy sửa trước khi thuyết minh.",
         )
 
     _update_srt_audio_job_json(

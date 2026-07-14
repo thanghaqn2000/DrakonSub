@@ -85,5 +85,23 @@ def save_edited_cues(job_dir: Path, submitted: list[dict]) -> list[SubtitleCue]:
     return updated
 
 
+BLOCKING_ISSUE_CODES = frozenset(
+    {"empty_text", "start_after_end", "overlap_next", "invalid_timestamp"}
+)
+WARNING_ISSUE_CODES = frozenset({"too_long"})
+
+
+def blocking_issues_of(issues: list[str] | None) -> list[str]:
+    return [code for code in (issues or []) if code in BLOCKING_ISSUE_CODES]
+
+
+def warning_issues_of(issues: list[str] | None) -> list[str]:
+    return [code for code in (issues or []) if code in WARNING_ISSUE_CODES]
+
+
 def has_blocking_issues(rows: list[dict]) -> bool:
-    return any(row.get("issues") for row in rows)
+    return any(blocking_issues_of(row.get("issues")) for row in rows)
+
+
+def has_warning_issues(rows: list[dict]) -> bool:
+    return any(warning_issues_of(row.get("issues")) for row in rows)

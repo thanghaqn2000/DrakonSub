@@ -9,6 +9,8 @@ if str(ROOT) not in sys.path:
 
 from auto_subtitle.srt_audio.cue_service import (  # noqa: E402
     annotate_cues,
+    has_blocking_issues,
+    has_warning_issues,
     load_effective_cues,
     save_edited_cues,
 )
@@ -25,6 +27,8 @@ class SrtAudioCueServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["issues"], [])
         self.assertIn("too_long", rows[1]["issues"])
         self.assertGreater(rows[1]["estimated_ms"], 1000)
+        self.assertFalse(has_blocking_issues(rows))
+        self.assertTrue(has_warning_issues(rows))
 
     def test_save_rejects_count_mismatch_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

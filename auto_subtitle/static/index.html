@@ -382,6 +382,42 @@
 
     .progress-wrap.visible { display: block; }
 
+    .srt-audio-cue-list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .srt-audio-cue-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+    }
+    .srt-audio-cue-card.has-error { border-color: #c0392b; }
+    .srt-audio-cue-card.has-warning { border-color: #d68910; }
+    .srt-audio-cue-head {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem;
+      margin-bottom: 0.55rem;
+    }
+    .srt-audio-cue-index {
+      font-weight: 650; letter-spacing: 0.02em;
+      min-width: 2rem;
+    }
+    .srt-audio-cue-times {
+      display: flex; gap: 0.4rem; align-items: center; flex: 1;
+    }
+    .srt-audio-cue-times input {
+      width: 8.2rem; font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.9rem;
+    }
+    .srt-audio-cue-chip {
+      font-size: 0.78rem; opacity: 0.85;
+    }
+    .srt-audio-cue-card textarea.srt-audio-text {
+      width: 100%; resize: none; overflow: hidden;
+      min-height: 3.2rem; max-height: 14rem;
+      line-height: 1.45; font-size: 1.02rem;
+      border-radius: 8px; padding: 0.65rem 0.75rem;
+    }
+    .srt-audio-help { font-size: 0.88rem; opacity: 0.8; margin: 0.35rem 0 0; }
+
     .progress-bar {
       height: 8px;
       background: var(--border);
@@ -1145,8 +1181,8 @@
 
         <div id="srt-audio-step2" class="hidden">
           <h3>Chỉnh sửa cue</h3>
-          <p class="field-hint">Chỉ sửa text và timestamp. Cue chồng/sai timestamp sẽ chặn thuyết minh. Cue text dài hơn slot chỉ cảnh báo — vẫn tạo được.</p>
-          <div id="srt-audio-cue-editor" class="subtitle-modal-body" style="max-height: 420px; padding: 0; margin: 0.75rem 0;"></div>
+          <p class="field-hint">Chỉ sửa text và timestamp. Cue chồng/sai timestamp sẽ chặn thuyết minh. Cue text dài hơn slot chỉ cảnh báo — vẫn tạo được. Sau thuyết minh, timestamp được cập nhật theo thời gian đọc thực tế (có thể đẩy cue sau).</p>
+          <div id="srt-audio-cue-editor" class="subtitle-modal-body" style="max-height: min(70vh, 560px); padding: 0; margin: 0.75rem 0;"></div>
           <div class="actions">
             <button class="btn-secondary" id="srt-audio-save-cues-btn" disabled>Lưu chỉnh sửa</button>
           </div>
@@ -1166,6 +1202,9 @@
             <div class="field" style="margin-top:0">
               <label for="srt-audio-saydi-speed">Tốc độ đọc</label>
               <input type="number" id="srt-audio-saydi-speed" min="0.5" max="2.0" step="0.05" value="1" />
+            </div>
+            <div class="field" style="margin-top:0; flex: 1 1 100%;">
+              <p class="srt-audio-help">Tốc độ do bạn chọn. Nếu câu dài hơn khoảng trống tới cue sau, hệ thống sẽ đẩy các cue sau và cập nhật timestamp (nghỉ ~280ms giữa câu).</p>
             </div>
             <div class="field" style="margin-top:0">
               <label for="srt-audio-format">Định dạng tải</label>
@@ -2013,6 +2052,13 @@
       const issues = cue.issues || [];
       return issues.length > 0 && !cueHasBlockingIssues(cue);
     }
+    function autoGrowSrtAudioTextarea(el) {
+      if (!el) return;
+      el.style.height = "auto";
+      const max = 224;
+      el.style.height = Math.min(el.scrollHeight, max) + "px";
+      el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+    }
     function renderSrtAudioCues(rows) {
       srtAudioCues = rows || [];
       if (!srtAudioCueEditor) return;
@@ -2020,28 +2066,31 @@
         srtAudioCueEditor.innerHTML = `<div class="subtitle-empty">Chưa có cue.</div>`;
         return;
       }
-      srtAudioCueEditor.innerHTML = srtAudioCues.map((cue) => {
+      srtAudioCueEditor.innerHTML = `<div class="srt-audio-cue-list">${srtAudioCues.map((cue) => {
         const blocking = cueHasBlockingIssues(cue);
         const warningOnly = cueHasWarningOnly(cue);
-        const outline = blocking
-          ? "outline:1px solid #c0392b;border-radius:8px;padding:0.35rem;"
-          : (warningOnly ? "outline:1px solid #d68910;border-radius:8px;padding:0.35rem;" : "");
+        const cardClass = blocking ? "has-error" : (warningOnly ? "has-warning" : "");
         const issueColor = blocking ? "#c0392b" : "#d68910";
         const issueText = (cue.issues || []).map(issueLabel).join(", ");
         return `
-          <div class="subtitle-row" data-index="${cue.index}" style="${outline}">
-            <div class="subtitle-row-meta">
-              <strong>#${cue.index}</strong>
-              ${issueText ? `<span style="color:${issueColor};font-size:0.85em;">${escapeHtml(issueText)}</span>` : ""}
-              <span style="opacity:0.7;font-size:0.85em;">ước lượng ${cue.estimated_ms || 0}ms</span>
-            </div>
-            <div class="field-row">
-              <input class="srt-audio-start" data-index="${cue.index}" value="${escapeHtml(cue.start)}" />
-              <input class="srt-audio-end" data-index="${cue.index}" value="${escapeHtml(cue.end)}" />
+          <div class="srt-audio-cue-card ${cardClass}" data-index="${cue.index}">
+            <div class="srt-audio-cue-head">
+              <span class="srt-audio-cue-index">#${cue.index}</span>
+              <div class="srt-audio-cue-times">
+                <input class="srt-audio-start" data-index="${cue.index}" value="${escapeHtml(cue.start)}" aria-label="Start #${cue.index}" />
+                <span aria-hidden="true">→</span>
+                <input class="srt-audio-end" data-index="${cue.index}" value="${escapeHtml(cue.end)}" aria-label="End #${cue.index}" />
+              </div>
+              ${issueText ? `<span class="srt-audio-cue-chip" style="color:${issueColor}">${escapeHtml(issueText)}</span>` : ""}
+              <span class="srt-audio-cue-chip">ước lượng ${cue.estimated_ms || 0}ms</span>
             </div>
             <textarea class="srt-audio-text" data-index="${cue.index}" rows="2">${escapeHtml(cue.text || "")}</textarea>
           </div>`;
-      }).join("");
+      }).join("")}</div>`;
+      srtAudioCueEditor.querySelectorAll("textarea.srt-audio-text").forEach((el) => {
+        autoGrowSrtAudioTextarea(el);
+        el.addEventListener("input", () => autoGrowSrtAudioTextarea(el));
+      });
       updateSrtAudioSynthesizeEnabled(srtAudioCues.some((c) => cueHasBlockingIssues(c)));
     }
     function collectSrtAudioCuesFromEditor() {
@@ -2156,7 +2205,12 @@
               srtAudioDownloadBtn.setAttribute("download", `srt-audio.${fmt}`);
             }
             if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = false;
-            showSrtAudioSuccess("Đã tạo audio thuyết minh.");
+            try {
+              await refreshSrtAudioCues();
+              showSrtAudioSuccess("Đã tạo audio. Timestamp đã cập nhật theo thời gian đọc thực tế.");
+            } catch (_err) {
+              showSrtAudioSuccess("Đã tạo audio thuyết minh.");
+            }
           } else if (data.status === "failed") {
             stopSrtAudioPolling();
             showSrtAudioProgress(pct || 100, "Không tạo được audio.");

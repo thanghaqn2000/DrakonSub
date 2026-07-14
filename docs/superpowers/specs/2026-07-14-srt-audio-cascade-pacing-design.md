@@ -37,9 +37,9 @@ Ngoài ra editor cue vẫn dạng input mặc định, khó đọc — cần UI 
 | Topic | Choice |
 |-------|--------|
 | Base speed | UI global, default `1.0`, user chỉnh tay |
-| Fill slot dư | **Không** — giữ tốc độ user; silence còn lại chấp nhận |
-| Thiếu thời gian | Cascade theo **duration đo được** sau TTS (hướng 2) |
-| GAP giữa cue | **280ms** (`prev_end + 280` làm floor cho `planned_start` tiếp) |
+| Thiếu thời gian | Cascade đẩy cue sau theo duration TTS (min gap) |
+| GAP giữa cue | Min **280ms**; max nghỉ **2000ms** — dư hơn thì kéo cue sau lên sớm |
+| Fill slot dư | **Không** chậm giọng; chỉ **kéo cue sau** nếu silence > max gap |
 | Timestamp sau synth | Cập nhật cues trên UI + disk theo timeline cascade |
 | `too_long` pre-check | Chỉ **cảnh báo** (không block); cascade xử lý thiếu chỗ |
 | Speeding khi overflow | Không bắt buộc tăng speed; để cascade đẩy cue sau |
@@ -51,9 +51,9 @@ Với mỗi cue theo thứ tự index:
 
 1. TTS với `saydi_speed` global → file segment → `duration_ms` (probe thật).
 2. `intent_start_ms` = `start` đang lưu trên cue (SRT / chỉnh tay trước synth).
-3. `planned_start_ms = max(intent_start_ms, prev_end_ms + GAP_MS)` với `GAP_MS = 280`, `prev_end_ms` của cue đầu = `0` (hoặc không áp floor nếu là cue đầu và `intent_start` đã đủ).
+3. `planned_start_ms = clamp(intent, prev_end + MIN_GAP, prev_end + MAX_GAP)` với `MIN_GAP=280`, `MAX_GAP=2000` (cue đầu: giữ `intent`).
 4. `planned_end_ms = planned_start_ms + duration_ms`.
-5. Ghi vào manifest + cập nhật cue: `start`/`end` (hoặc field `actual_*` rồi sync vào `start`/`end` hiển thị) = timeline cascade.
+5. Ghi vào manifest + cập nhật cue: `start`/`end` = timeline cascade (`shift_ms` có thể âm khi kéo sớm).
 6. Cue kế dùng `prev_end_ms = planned_end_ms`.
 
 Ghép track: `adelay` theo `planned_start_ms` (không truncate theo `end` SRT cũ).
@@ -97,7 +97,7 @@ Re-synth: dùng `start` hiện tại trên cues (đã cascade) làm `intent_star
 - `auto_subtitle/srt_audio/job_service.py` — vòng TTS + đặt `planned_start` cascade; ghi lại cues.
 - `auto_subtitle/srt_audio/audio_track.py` — dùng `planned_start` (đã có `start_ms` từ caller).
 - `auto_subtitle/srt_audio/cue_service.py` / API GET-PUT — trả/nhận timestamp đã cập nhật; không đổi contract lớn.
-- Config: `SRT_AUDIO_CUE_GAP_MS` (default 280) trong config + `.env.example`.
+- Config: `SRT_AUDIO_CUE_GAP_MS` (default 280), `SRT_AUDIO_CUE_MAX_GAP_MS` (default 2000).
 - `static/index.html` — CSS + `renderSrtAudioCues` + auto-grow helpers.
 
 ## Testing

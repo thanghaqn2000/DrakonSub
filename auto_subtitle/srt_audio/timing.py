@@ -31,11 +31,20 @@ def plan_cascade_starts(
     durations_ms: list[int],
     *,
     gap_ms: int = 280,
+    max_gap_ms: int = 2000,
 ) -> list[int]:
+    """Place cues with min rest (gap_ms) and max rest (max_gap_ms) after previous speech.
+
+    - If intent is earlier than prev_end + gap_ms → push later (overflow cascade).
+    - If intent is later than prev_end + max_gap_ms → pull earlier (cap long silence).
+    - Otherwise keep intent.
+    """
     if len(intent_starts_ms) != len(durations_ms):
         raise ValueError("intent_starts_ms and durations_ms length mismatch")
     if gap_ms < 0:
         raise ValueError("gap_ms must be >= 0")
+    if max_gap_ms < gap_ms:
+        raise ValueError("max_gap_ms must be >= gap_ms")
     planned: list[int] = []
     prev_end: int | None = None
     for intent, duration in zip(intent_starts_ms, durations_ms):
@@ -44,7 +53,9 @@ def plan_cascade_starts(
         if prev_end is None:
             start = intent_i
         else:
-            start = max(intent_i, prev_end + int(gap_ms))
+            earliest = prev_end + int(gap_ms)
+            latest = prev_end + int(max_gap_ms)
+            start = max(earliest, min(intent_i, latest))
         planned.append(start)
         prev_end = start + dur_i
     return planned

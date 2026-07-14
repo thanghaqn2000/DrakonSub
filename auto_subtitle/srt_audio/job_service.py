@@ -41,6 +41,15 @@ def _resolve_cue_gap_ms(cue_gap_ms: int | None) -> int:
     return max(0, int(raw))
 
 
+def _resolve_cue_max_gap_ms(cue_max_gap_ms: int | None, *, min_gap_ms: int) -> int:
+    if cue_max_gap_ms is not None:
+        value = max(0, int(cue_max_gap_ms))
+    else:
+        raw = (os.getenv("SRT_AUDIO_CUE_MAX_GAP_MS") or "2000").strip() or "2000"
+        value = max(0, int(raw))
+    return max(value, min_gap_ms)
+
+
 def create_job_from_srt_bytes(jobs_root: Path, srt_bytes: bytes) -> tuple[str, Path]:
     jobs_root.mkdir(parents=True, exist_ok=True)
     job_id = str(uuid.uuid4())
@@ -85,12 +94,14 @@ def run_synthesize_job(
     output_format: str = "wav",
     chars_per_second: float = 13.0,
     cue_gap_ms: int | None = None,
+    cue_max_gap_ms: int | None = None,
 ) -> dict[str, Any]:
     fmt = (output_format or "wav").strip().lower()
     if fmt not in {"wav", "mp3"}:
         raise SrtAudioJobError("output_format phải là wav hoặc mp3.")
 
     gap_ms = _resolve_cue_gap_ms(cue_gap_ms)
+    max_gap_ms = _resolve_cue_max_gap_ms(cue_max_gap_ms, min_gap_ms=gap_ms)
     speed = float(saydi_speed) if saydi_speed is not None else 1.0
     cues = load_effective_cues(job_dir)
     rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed)
@@ -123,7 +134,7 @@ def run_synthesize_job(
         durations_ms.append(tts_ms)
 
     planned_starts = plan_cascade_starts(
-        intent_starts_ms, durations_ms, gap_ms=gap_ms
+        intent_starts_ms, durations_ms, gap_ms=gap_ms, max_gap_ms=max_gap_ms
     )
 
     updated_cues: list[SubtitleCue] = []
@@ -138,6 +149,8 @@ def run_synthesize_job(
         shift_ms = planned - intent
         if shift_ms > 0:
             overflow_warnings.append(f"cue_{cue.index}:shifted_{shift_ms}ms")
+        elif shift_ms < 0:
+            overflow_warnings.append(f"cue_{cue.index}:pulled_{abs(shift_ms)}ms")
         updated_cues.append(
             SubtitleCue(
                 index=cue.index,
@@ -184,6 +197,7 @@ def run_synthesize_job(
         "saydi_sample": saydi_config.sample,
         "saydi_speed": saydi_config.speed,
         "cue_gap_ms": gap_ms,
+        "cue_max_gap_ms": max_gap_ms,
         "chars_per_second": chars_per_second,
         "output_format": fmt,
         "track_duration_ms": track_duration_ms,
@@ -212,6 +226,7 @@ def run_synthesize_job(
                 "track_duration_ms": track_duration_ms,
                 "overflow_warning_count": len(overflow_warnings),
                 "cue_gap_ms": gap_ms,
+                "cue_max_gap_ms": max_gap_ms,
             },
         }
     )

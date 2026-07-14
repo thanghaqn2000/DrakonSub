@@ -46,6 +46,7 @@ class CascadePlacementTests(unittest.TestCase):
             intent_starts_ms=[0, 4000],
             durations_ms=[3000, 1000],
             gap_ms=280,
+            max_gap_ms=2000,
         )
         self.assertEqual(starts, [0, 4000])
 
@@ -54,20 +55,36 @@ class CascadePlacementTests(unittest.TestCase):
             intent_starts_ms=[0, 3000],
             durations_ms=[5000, 2000],
             gap_ms=280,
+            max_gap_ms=2000,
         )
         self.assertEqual(starts, [0, 5280])
+
+    def test_pulls_next_when_silence_exceeds_max_gap(self) -> None:
+        # cue0 ends 3000; intent1=6000 (3s leftover) → cap rest at 2s → start 5000
+        starts = plan_cascade_starts(
+            intent_starts_ms=[0, 6000],
+            durations_ms=[3000, 1000],
+            gap_ms=280,
+            max_gap_ms=2000,
+        )
+        self.assertEqual(starts, [0, 5000])
 
     def test_cascade_chain(self) -> None:
         starts = plan_cascade_starts(
             intent_starts_ms=[3000, 11000, 17000],
             durations_ms=[9000, 7000, 1000],
             gap_ms=280,
+            max_gap_ms=2000,
         )
         self.assertEqual(starts, [3000, 12280, 19560])
 
     def test_length_mismatch_raises(self) -> None:
         with self.assertRaises(ValueError):
             plan_cascade_starts([0], [1, 2], gap_ms=280)
+
+    def test_max_gap_below_min_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            plan_cascade_starts([0, 1000], [100, 100], gap_ms=500, max_gap_ms=200)
 
 
 if __name__ == "__main__":

@@ -2663,11 +2663,27 @@ def main():
 
     host = os.getenv("DRAKONSUB_HOST", "127.0.0.1")
     port = int(os.getenv("DRAKONSUB_PORT", "8000"))
+    reload_enabled = os.getenv("DRAKONSUB_RELOAD", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     model = get_openai_model()
     print(f"DrakonSub web UI: http://{host}:{port}")
     print(f"OpenAI model: {model}")
-    uvicorn.run(app, host=host, port=port)
+    if reload_enabled:
+        print("Reload: ON (DRAKONSUB_RELOAD)")
+        uvicorn.run(
+            "auto_subtitle.web:app",
+            host=host,
+            port=port,
+            reload=True,
+            reload_dirs=["auto_subtitle"],
+        )
+    else:
+        uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

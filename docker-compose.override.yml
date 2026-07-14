@@ -1,0 +1,8 @@
+# Local/dev overrides — Docker Compose merges this file automatically with docker-compose.yml.
+# Mounts source + enables uvicorn reload so UI/API changes appear without image rebuild.
+services:
+  drakonsub:
+    environment:
+      DRAKONSUB_RELOAD: "1"
+    volumes:
+      - ./auto_subtitle:/app/auto_subtitle

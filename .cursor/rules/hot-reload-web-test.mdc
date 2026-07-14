@@ -1,0 +1,21 @@
+---
+description: Sau mỗi lần sửa code, cập nhật môi trường web để PO test ngay
+alwaysApply: true
+---
+
+# Hot-reload web cho test
+
+Local dùng `docker-compose.override.yml`: mount `./auto_subtitle` + `DRAKONSUB_RELOAD=1`.
+
+## Sau khi sửa code ảnh hưởng API/UI
+
+1. **Ưu tiên:** Khi override đang bật, file change (Python/static) tự reload — **không** cần rebuild image.
+2. Nếu vừa thêm/sửa `docker-compose*.yml`, `Dockerfile`, dependencies (`setup.py`), hoặc container chưa có volume mount: chạy
+
+```bash
+docker compose up -d --force-recreate
+```
+
+3. Nếu reload không nhận file mới / process chết: `docker compose restart drakonsub` rồi kiểm tra `docker compose logs --tail 30 drakonsub`.
+4. **Không** im lặng để PO tự rebuild — sau bước implement, chủ động recreate/restart nếu cần và nhắc URL test (thường `http://192.168.1.5:8000` hoặc `http://localhost:8000`).
+5. Hard refresh browser (Cmd+Shift+R) nếu chỉ đổi `static/index.html` mà cache còn cũ.

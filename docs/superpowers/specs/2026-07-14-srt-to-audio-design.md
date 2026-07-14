@@ -2,7 +2,9 @@
 
 Date: 2026-07-14  
 Branch: `feature/implement_srt_feature`  
-Status: Draft for PO review
+Status: Draft for PO review  
+
+**Amendment (2026-07-14):** Timing cứng / no-cascade / block `too_long` đã được **supersede** bởi [`2026-07-14-srt-audio-cascade-pacing-design.md`](./2026-07-14-srt-audio-cascade-pacing-design.md) (cascade theo duration TTS, speed do user, cập nhật timestamp + editor UI).
 
 ## Problem
 

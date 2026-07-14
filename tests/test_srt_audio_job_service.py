@@ -130,6 +130,66 @@ class SrtAudioJobServiceTests(unittest.TestCase):
             self.assertTrue(Path(result["output_wav"]).is_file())
             mock_mp3.assert_not_called()
 
+    def test_synthesize_cascades_and_rewrites_edited_srt(self) -> None:
+        sample = (
+            "1\n00:00:00,000 --> 00:00:02,000\nOne.\n\n"
+            "2\n00:00:02,000 --> 00:00:04,000\nTwo.\n\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, job_dir = create_job_from_srt_bytes(root, sample.encode("utf-8"))
+            from auto_subtitle.srt_audio.cue_service import edited_srt_path
+            from auto_subtitle.subtitle_edit_service import load_srt
+
+            durations = {1: 3500, 2: 1000}
+            starts_captured: dict = {}
+
+            def fake_tts(text, path, config=None):
+                path.write_bytes(b"RIFF....")
+
+            def fake_probe(path):
+                return durations[int(path.stem)]
+
+            def fake_build(*, segment_starts_ms, segment_paths, track_duration_ms, output_path):
+                starts_captured["starts"] = list(segment_starts_ms)
+                starts_captured["track"] = track_duration_ms
+                Path(output_path).write_bytes(b"wav")
+
+            with patch(
+                "auto_subtitle.srt_audio.job_service.load_saydi_config",
+                return_value=type("C", (), {"token": "t", "sample": "s", "speed": 1.0})(),
+            ):
+                with patch(
+                    "auto_subtitle.srt_audio.job_service.synthesize_to_file",
+                    side_effect=fake_tts,
+                ):
+                    with patch(
+                        "auto_subtitle.srt_audio.job_service.probe_audio_duration_ms",
+                        side_effect=fake_probe,
+                    ):
+                        with patch(
+                            "auto_subtitle.srt_audio.job_service.build_srt_audio_track",
+                            side_effect=fake_build,
+                        ):
+                            run_synthesize_job(
+                                job_dir,
+                                saydi_sample="s",
+                                saydi_speed=1.0,
+                                output_format="wav",
+                                cue_gap_ms=280,
+                            )
+
+            self.assertEqual(starts_captured["starts"], [0, 3780])
+            cues = load_srt(edited_srt_path(job_dir))
+            self.assertEqual(cues[0].start, "00:00:00,000")
+            self.assertEqual(cues[0].end, "00:00:03,500")
+            self.assertEqual(cues[1].start, "00:00:03,780")
+            self.assertEqual(cues[1].end, "00:00:04,780")
+            manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["cue_gap_ms"], 280)
+            self.assertEqual(manifest["segments"][1]["shift_ms"], 1780)
+            self.assertEqual(manifest["saydi_speed"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

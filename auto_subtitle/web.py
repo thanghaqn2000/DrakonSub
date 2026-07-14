@@ -82,6 +82,17 @@ from .voiceover.script_job import (
     validate_edited_cues,
     voiceover_srt_path,
 )
+from .srt_audio.cue_service import (
+    SrtAudioCueError,
+    annotate_cues,
+    load_effective_cues,
+    save_edited_cues as save_srt_audio_cues,
+)
+from .srt_audio.job_service import (
+    SrtAudioJobError,
+    create_job_from_srt_bytes,
+    run_synthesize_job as run_srt_audio_synthesize_job,
+)
 
 load_env()
 
@@ -105,6 +116,16 @@ def _resolve_voiceover_jobs_root() -> Path:
 
 
 VOICEOVER_JOBS_ROOT = _resolve_voiceover_jobs_root()
+
+
+def _resolve_srt_audio_jobs_root() -> Path:
+    raw = os.getenv("DRAKONSUB_SRT_AUDIO_JOBS_ROOT", "").strip()
+    if raw:
+        return Path(raw)
+    return Path("data/srt-audio-jobs")
+
+
+SRT_AUDIO_JOBS_ROOT = _resolve_srt_audio_jobs_root()
 JOB_META_FILENAME = "job.json"
 JOB_RELOAD_MESSAGE = "Không tìm thấy video đã tải. Vui lòng tải lại video từ link."
 TRANSLATION_ENGINE_LABELS = {
@@ -1873,6 +1894,310 @@ def get_voiceover_output_video(job_id: str):
     if not output_path.is_file():
         raise HTTPException(404, "Output video not found")
     return FileResponse(str(output_path), media_type="video/mp4", filename=output_path.name)
+
+
+def _srt_audio_default_chars_per_second() -> float:
+    raw = (os.getenv("SRT_AUDIO_CHARS_PER_SECOND") or "13").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 13.0
+
+
+def _srt_audio_validate_job_id(job_id: str) -> str:
+    raw = (job_id or "").strip()
+    if (
+        not raw
+        or "/" in raw
+        or "\\" in raw
+        or ".." in raw
+        or Path(raw).is_absolute()
+    ):
+        raise HTTPException(404, "SRT audio job not found")
+    return raw
+
+
+def _srt_audio_job_dir(job_id: str) -> Path:
+    return SRT_AUDIO_JOBS_ROOT / _srt_audio_validate_job_id(job_id)
+
+
+def _read_srt_audio_job_json(job_id: str) -> Optional[Dict[str, Any]]:
+    path = _srt_audio_job_dir(job_id) / "job.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_srt_audio_job_json(job_id: str, payload: Dict[str, Any]) -> None:
+    job_dir = _srt_audio_job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "job.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
+def _update_srt_audio_job_json(job_id: str, updates: Dict[str, Any]) -> None:
+    payload = _read_srt_audio_job_json(job_id) or {"job_id": job_id}
+    payload.update(updates)
+    payload["updated_at"] = _voiceover_utc_now()
+    _write_srt_audio_job_json(job_id, payload)
+
+
+def _run_srt_audio_synthesize_background(
+    job_id: str,
+    job_dir: Path,
+    *,
+    saydi_sample: Optional[str],
+    saydi_speed: Optional[float],
+    output_format: str,
+    chars_per_second: float,
+) -> None:
+    try:
+        _update_srt_audio_job_json(
+            job_id,
+            {
+                "status": "processing",
+                "stage": "synthesizing",
+                "progress_percent": 40,
+                "error": None,
+            },
+        )
+        result = run_srt_audio_synthesize_job(
+            job_dir,
+            saydi_sample=saydi_sample,
+            saydi_speed=saydi_speed,
+            output_format=output_format,
+            chars_per_second=chars_per_second,
+        )
+        _update_srt_audio_job_json(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "progress_percent": 100,
+                "error": None,
+                "output_format": output_format,
+                "summary": result.get("summary"),
+            },
+        )
+    except SrtAudioJobError as exc:
+        _update_srt_audio_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+    except Exception as exc:
+        print(f"[srt-audio {job_id}] unexpected failure: {exc}")
+        traceback.print_exc()
+        _update_srt_audio_job_json(
+            job_id,
+            {
+                "status": "failed",
+                "stage": "failed",
+                "progress_percent": 100,
+                "error": _sanitize_voiceover_error(str(exc)),
+            },
+        )
+
+
+@app.post("/api/srt-audio/jobs")
+async def create_srt_audio_job(srt_file: UploadFile = File(...)):
+    filename = (srt_file.filename or "").lower()
+    if not filename.endswith(".srt"):
+        raise HTTPException(400, "Chỉ chấp nhận file .srt")
+    content = await srt_file.read()
+    if not content.strip():
+        raise HTTPException(400, "File SRT trống.")
+    try:
+        job_id, _job_dir = create_job_from_srt_bytes(SRT_AUDIO_JOBS_ROOT, content)
+    except SrtAudioJobError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "job_id": job_id,
+        "status": "ready",
+        "status_url": f"/api/srt-audio/jobs/{job_id}",
+        "cues_url": f"/api/srt-audio/jobs/{job_id}/cues",
+        "message": "Đã tải SRT. Có thể chỉnh sửa cue rồi tạo audio.",
+    }
+
+
+@app.get("/api/srt-audio/jobs/{job_id}")
+def get_srt_audio_job(job_id: str):
+    payload = _read_srt_audio_job_json(job_id)
+    if not payload:
+        raise HTTPException(404, "SRT audio job not found")
+    status = payload.get("status")
+    fmt = (payload.get("output_format") or "wav").lower()
+    audio_ready = status == "completed" and (
+        (_srt_audio_job_dir(job_id) / "output.wav").is_file()
+        or (_srt_audio_job_dir(job_id) / "output.mp3").is_file()
+    )
+    return {
+        "job_id": job_id,
+        "status": status,
+        "stage": payload.get("stage"),
+        "progress_percent": payload.get("progress_percent", 0),
+        "error": payload.get("error"),
+        "cue_count": payload.get("cue_count"),
+        "output_format": payload.get("output_format"),
+        "summary": payload.get("summary"),
+        "audio_ready": audio_ready,
+        "audio_url": f"/api/srt-audio/jobs/{job_id}/audio?format={fmt}" if audio_ready else None,
+        "cues_url": f"/api/srt-audio/jobs/{job_id}/cues",
+    }
+
+
+@app.get("/api/srt-audio/jobs/{job_id}/cues")
+def get_srt_audio_cues(
+    job_id: str,
+    saydi_speed: float = 1.0,
+    chars_per_second: Optional[float] = None,
+):
+    if not _read_srt_audio_job_json(job_id):
+        raise HTTPException(404, "SRT audio job not found")
+    cps = chars_per_second if chars_per_second is not None else _srt_audio_default_chars_per_second()
+    try:
+        cues = load_effective_cues(_srt_audio_job_dir(job_id))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rows = annotate_cues(cues, chars_per_second=cps, saydi_speed=float(saydi_speed))
+    return {
+        "job_id": job_id,
+        "chars_per_second": cps,
+        "saydi_speed": float(saydi_speed),
+        "cues": rows,
+        "has_blocking_issues": any(row.get("issues") for row in rows),
+    }
+
+
+@app.put("/api/srt-audio/jobs/{job_id}/cues")
+def put_srt_audio_cues(job_id: str, body: dict = Body(default_factory=dict)):
+    if not _read_srt_audio_job_json(job_id):
+        raise HTTPException(404, "SRT audio job not found")
+    submitted = body.get("cues")
+    if not isinstance(submitted, list):
+        raise HTTPException(400, "Thiếu danh sách cues.")
+    try:
+        speed = float(body.get("saydi_speed", 1.0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "saydi_speed không hợp lệ.") from exc
+    cps = body.get("chars_per_second")
+    try:
+        chars_per_second = (
+            float(cps) if cps is not None else _srt_audio_default_chars_per_second()
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "chars_per_second không hợp lệ.") from exc
+    try:
+        saved = save_srt_audio_cues(_srt_audio_job_dir(job_id), submitted)
+    except SrtAudioCueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rows = annotate_cues(saved, chars_per_second=chars_per_second, saydi_speed=speed)
+    _update_srt_audio_job_json(job_id, {"cue_count": len(saved), "status": "ready", "stage": "ready"})
+    return {
+        "job_id": job_id,
+        "cue_count": len(saved),
+        "cues": rows,
+        "has_blocking_issues": any(row.get("issues") for row in rows),
+        "message": "Đã lưu chỉnh sửa SRT.",
+    }
+
+
+@app.post("/api/srt-audio/jobs/{job_id}/synthesize")
+def synthesize_srt_audio_job(job_id: str, body: dict = Body(default_factory=dict)):
+    payload = _read_srt_audio_job_json(job_id)
+    if not payload:
+        raise HTTPException(404, "SRT audio job not found")
+    if payload.get("status") == "processing":
+        raise HTTPException(409, "Job đang tạo audio, vui lòng đợi.")
+
+    saydi_sample = _parse_optional_saydi_sample(body.get("saydi_sample"))
+    saydi_speed = _parse_optional_saydi_speed(body.get("saydi_speed"))
+    output_format = str(body.get("output_format") or "wav").strip().lower()
+    if output_format not in {"wav", "mp3"}:
+        raise HTTPException(400, "output_format phải là wav hoặc mp3.")
+    cps_raw = body.get("chars_per_second")
+    try:
+        chars_per_second = (
+            float(cps_raw) if cps_raw is not None else _srt_audio_default_chars_per_second()
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "chars_per_second không hợp lệ.") from exc
+
+    speed_for_check = float(saydi_speed) if saydi_speed is not None else 1.0
+    cues = load_effective_cues(_srt_audio_job_dir(job_id))
+    rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed_for_check)
+    if any(row.get("issues") for row in rows):
+        raise HTTPException(
+            400,
+            "SRT còn lỗi timing/độ dài. Hãy sửa timestamp hoặc rút gọn text trước khi thuyết minh.",
+        )
+
+    _update_srt_audio_job_json(
+        job_id,
+        {
+            "status": "processing",
+            "stage": "queued",
+            "progress_percent": 20,
+            "error": None,
+            "output_format": output_format,
+        },
+    )
+    threading.Thread(
+        target=_run_srt_audio_synthesize_background,
+        kwargs={
+            "job_id": job_id,
+            "job_dir": _srt_audio_job_dir(job_id),
+            "saydi_sample": saydi_sample,
+            "saydi_speed": saydi_speed,
+            "output_format": output_format,
+            "chars_per_second": chars_per_second,
+        },
+        daemon=True,
+    ).start()
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "status_url": f"/api/srt-audio/jobs/{job_id}",
+        "message": "Đã bắt đầu tạo audio thuyết minh.",
+    }
+
+
+@app.get("/api/srt-audio/jobs/{job_id}/audio")
+def get_srt_audio_file(job_id: str, format: str = "wav"):
+    payload = _read_srt_audio_job_json(job_id)
+    if not payload:
+        raise HTTPException(404, "SRT audio job not found")
+    if payload.get("status") != "completed":
+        raise HTTPException(409, "Audio chưa sẵn sàng.")
+    fmt = (format or "wav").strip().lower()
+    if fmt not in {"wav", "mp3"}:
+        raise HTTPException(400, "format phải là wav hoặc mp3.")
+    job_dir = _srt_audio_job_dir(job_id)
+    if fmt == "mp3":
+        path = job_dir / "output.mp3"
+        if not path.is_file():
+            wav = job_dir / "output.wav"
+            if not wav.is_file():
+                raise HTTPException(404, "Audio not found")
+            from .srt_audio.audio_track import convert_wav_to_mp3
+
+            try:
+                convert_wav_to_mp3(wav, path)
+            except Exception as exc:
+                raise HTTPException(500, f"Không tạo được MP3: {exc}") from exc
+        return FileResponse(str(path), media_type="audio/mpeg", filename=f"{job_id}.mp3")
+    path = job_dir / "output.wav"
+    if not path.is_file():
+        raise HTTPException(404, "Audio not found")
+    return FileResponse(str(path), media_type="audio/wav", filename=f"{job_id}.wav")
 
 
 @app.post("/api/jobs")

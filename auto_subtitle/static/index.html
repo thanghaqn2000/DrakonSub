@@ -768,6 +768,7 @@
     <div class="mode-tabs">
       <button class="mode-tab active" id="mode-vietsub-tab" type="button">Vietsub</button>
       <button class="mode-tab" id="mode-voiceover-tab" type="button">Thuyết minh</button>
+      <button class="mode-tab" id="mode-srt-audio-tab" type="button">SRT → Audio</button>
     </div>
 
     <div class="mode-panel active" id="vietsub-panel">
@@ -1116,6 +1117,72 @@
       </section>
     </div>
 
+    <div class="mode-panel" id="srt-audio-panel">
+      <section class="controls">
+        <p class="voiceover-description">
+          Upload file SRT, chỉnh text/timestamp, rồi tạo audio thuyết minh bằng Saydi (không cần video).
+        </p>
+
+        <div id="srt-audio-step1">
+          <div class="field">
+            <label for="srt-audio-file-input">File SRT</label>
+            <input type="file" id="srt-audio-file-input" accept=".srt,application/x-subrip,text/plain" />
+          </div>
+          <div class="actions">
+            <button class="btn-primary" id="srt-audio-upload-btn" disabled>Tải SRT lên</button>
+          </div>
+        </div>
+
+        <div id="srt-audio-step2" class="hidden">
+          <h3>Chỉnh sửa cue</h3>
+          <p class="field-hint">Chỉ sửa text và timestamp. Cue quá dài hoặc chồng thời gian sẽ được tô đỏ — phải sửa trước khi thuyết minh.</p>
+          <div id="srt-audio-cue-editor" class="subtitle-modal-body" style="max-height: 420px; padding: 0; margin: 0.75rem 0;"></div>
+          <div class="actions">
+            <button class="btn-secondary" id="srt-audio-save-cues-btn" disabled>Lưu chỉnh sửa</button>
+          </div>
+        </div>
+
+        <div id="srt-audio-step3" class="hidden">
+          <div class="field-row">
+            <div class="field" style="margin-top:0; flex: 1 1 100%;">
+              <label for="srt-audio-saydi-sample">Giọng đọc Saydi</label>
+              <select id="srt-audio-saydi-sample">
+                <option value="liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc" selected>Liam</option>
+                <option value="quyen-ru-f966mdF5njWREvreUG07">Quyến rũ</option>
+                <option value="ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6">Truyền cảm hứng</option>
+                <option value="moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR">Moncellence</option>
+              </select>
+            </div>
+            <div class="field" style="margin-top:0">
+              <label for="srt-audio-saydi-speed">Tốc độ đọc</label>
+              <input type="number" id="srt-audio-saydi-speed" min="0.5" max="2.0" step="0.05" value="1" />
+            </div>
+            <div class="field" style="margin-top:0">
+              <label for="srt-audio-format">Định dạng tải</label>
+              <select id="srt-audio-format">
+                <option value="wav" selected>WAV</option>
+                <option value="mp3">MP3</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn-primary" id="srt-audio-synthesize-btn" disabled>Thuyết minh</button>
+            <a class="btn-secondary" id="srt-audio-download-btn" hidden href="#">Tải audio</a>
+          </div>
+          <div class="progress-wrap" id="srt-audio-progress-wrap">
+            <div class="progress-bar">
+              <div class="progress-fill" id="srt-audio-progress-fill"></div>
+            </div>
+            <p class="progress-text" id="srt-audio-progress-text">Đang chờ...</p>
+          </div>
+          <audio id="srt-audio-player" controls style="width:100%; margin-top:0.75rem;" hidden></audio>
+        </div>
+
+        <p class="error" id="srt-audio-error-box"></p>
+        <p class="success-box" id="srt-audio-success-box"></p>
+      </section>
+    </div>
+
     <div class="subtitle-modal" id="subtitle-modal">
       <div class="subtitle-modal-card">
         <div class="subtitle-modal-header">
@@ -1167,8 +1234,10 @@
 
     const modeVietsubTab = document.getElementById("mode-vietsub-tab");
     const modeVoiceoverTab = document.getElementById("mode-voiceover-tab");
+    const modeSrtAudioTab = document.getElementById("mode-srt-audio-tab");
     const vietsubPanel = document.getElementById("vietsub-panel");
     const voiceoverPanel = document.getElementById("voiceover-panel");
+    const srtAudioPanel = document.getElementById("srt-audio-panel");
     const uploadZone = document.getElementById("upload-zone");
     const fileInput = document.getElementById("file-input");
     const videoUrlInput = document.getElementById("video-url-input");
@@ -1340,11 +1409,12 @@
 
     function setMode(mode) {
       currentMode = mode;
-      const isVietsub = mode === "vietsub";
-      modeVietsubTab.classList.toggle("active", isVietsub);
-      modeVoiceoverTab.classList.toggle("active", !isVietsub);
-      vietsubPanel.classList.toggle("active", isVietsub);
-      voiceoverPanel.classList.toggle("active", !isVietsub);
+      modeVietsubTab.classList.toggle("active", mode === "vietsub");
+      modeVoiceoverTab.classList.toggle("active", mode === "voiceover");
+      if (modeSrtAudioTab) modeSrtAudioTab.classList.toggle("active", mode === "srt-audio");
+      vietsubPanel.classList.toggle("active", mode === "vietsub");
+      voiceoverPanel.classList.toggle("active", mode === "voiceover");
+      if (srtAudioPanel) srtAudioPanel.classList.toggle("active", mode === "srt-audio");
     }
 
     function showVoiceoverError(msg) {
@@ -1805,6 +1875,262 @@
 
     modeVietsubTab.addEventListener("click", () => setMode("vietsub"));
     modeVoiceoverTab.addEventListener("click", () => setMode("voiceover"));
+    if (modeSrtAudioTab) modeSrtAudioTab.addEventListener("click", () => setMode("srt-audio"));
+
+    // --- SRT → Audio ---
+    const srtAudioFileInput = document.getElementById("srt-audio-file-input");
+    const srtAudioUploadBtn = document.getElementById("srt-audio-upload-btn");
+    const srtAudioStep2 = document.getElementById("srt-audio-step2");
+    const srtAudioStep3 = document.getElementById("srt-audio-step3");
+    const srtAudioCueEditor = document.getElementById("srt-audio-cue-editor");
+    const srtAudioSaveCuesBtn = document.getElementById("srt-audio-save-cues-btn");
+    const srtAudioSynthesizeBtn = document.getElementById("srt-audio-synthesize-btn");
+    const srtAudioDownloadBtn = document.getElementById("srt-audio-download-btn");
+    const srtAudioSaydiSample = document.getElementById("srt-audio-saydi-sample");
+    const srtAudioSaydiSpeed = document.getElementById("srt-audio-saydi-speed");
+    const srtAudioFormat = document.getElementById("srt-audio-format");
+    const srtAudioPlayer = document.getElementById("srt-audio-player");
+    const srtAudioErrorBox = document.getElementById("srt-audio-error-box");
+    const srtAudioSuccessBox = document.getElementById("srt-audio-success-box");
+    const srtAudioProgressFill = document.getElementById("srt-audio-progress-fill");
+    const srtAudioProgressText = document.getElementById("srt-audio-progress-text");
+    let srtAudioJobId = null;
+    let srtAudioCues = [];
+    let srtAudioPollTimer = null;
+    let srtAudioSelectedFile = null;
+
+    function showSrtAudioError(msg) {
+      if (!srtAudioErrorBox) return;
+      srtAudioErrorBox.textContent = msg;
+      srtAudioErrorBox.classList.add("visible");
+      if (srtAudioSuccessBox) {
+        srtAudioSuccessBox.classList.remove("visible");
+        srtAudioSuccessBox.textContent = "";
+      }
+    }
+    function clearSrtAudioError() {
+      if (!srtAudioErrorBox) return;
+      srtAudioErrorBox.classList.remove("visible");
+      srtAudioErrorBox.textContent = "";
+    }
+    function showSrtAudioSuccess(msg) {
+      if (!srtAudioSuccessBox) return;
+      srtAudioSuccessBox.textContent = msg;
+      srtAudioSuccessBox.classList.add("visible");
+      clearSrtAudioError();
+    }
+    function issueLabel(code) {
+      const map = {
+        empty_text: "Trống",
+        start_after_end: "Start ≥ end",
+        overlap_next: "Chồng cue sau",
+        too_long: "Text dài hơn slot",
+        invalid_timestamp: "Timestamp sai",
+      };
+      return map[code] || code;
+    }
+    function renderSrtAudioCues(rows) {
+      srtAudioCues = rows || [];
+      if (!srtAudioCueEditor) return;
+      if (!srtAudioCues.length) {
+        srtAudioCueEditor.innerHTML = `<div class="subtitle-empty">Chưa có cue.</div>`;
+        return;
+      }
+      srtAudioCueEditor.innerHTML = srtAudioCues.map((cue) => {
+        const bad = (cue.issues || []).length > 0;
+        const issueText = (cue.issues || []).map(issueLabel).join(", ");
+        return `
+          <div class="subtitle-row" data-index="${cue.index}" style="${bad ? "outline:1px solid #c0392b;border-radius:8px;padding:0.35rem;" : ""}">
+            <div class="subtitle-row-meta">
+              <strong>#${cue.index}</strong>
+              ${bad ? `<span style="color:#c0392b;font-size:0.85em;">${escapeHtml(issueText)}</span>` : ""}
+              <span style="opacity:0.7;font-size:0.85em;">ước lượng ${cue.estimated_ms || 0}ms</span>
+            </div>
+            <div class="field-row">
+              <input class="srt-audio-start" data-index="${cue.index}" value="${escapeHtml(cue.start)}" />
+              <input class="srt-audio-end" data-index="${cue.index}" value="${escapeHtml(cue.end)}" />
+            </div>
+            <textarea class="srt-audio-text" data-index="${cue.index}" rows="2">${escapeHtml(cue.text || "")}</textarea>
+          </div>`;
+      }).join("");
+      updateSrtAudioSynthesizeEnabled(srtAudioCues.some((c) => (c.issues || []).length > 0));
+    }
+    function collectSrtAudioCuesFromEditor() {
+      return srtAudioCues.map((cue) => {
+        const startEl = srtAudioCueEditor.querySelector(`.srt-audio-start[data-index="${cue.index}"]`);
+        const endEl = srtAudioCueEditor.querySelector(`.srt-audio-end[data-index="${cue.index}"]`);
+        const textEl = srtAudioCueEditor.querySelector(`.srt-audio-text[data-index="${cue.index}"]`);
+        return {
+          index: cue.index,
+          start: (startEl?.value || cue.start || "").trim(),
+          end: (endEl?.value || cue.end || "").trim(),
+          text: (textEl?.value || "").trim(),
+        };
+      });
+    }
+    function updateSrtAudioSynthesizeEnabled(hasIssues) {
+      if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = !srtAudioJobId || !!hasIssues;
+      if (srtAudioSaveCuesBtn) srtAudioSaveCuesBtn.disabled = !srtAudioJobId;
+    }
+    async function refreshSrtAudioCues() {
+      if (!srtAudioJobId) return;
+      const speed = Number(srtAudioSaydiSpeed?.value || 1);
+      const res = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/cues?saydi_speed=${encodeURIComponent(speed)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Không tải được cues.");
+      renderSrtAudioCues(data.cues || []);
+      updateSrtAudioSynthesizeEnabled(!!data.has_blocking_issues);
+    }
+    if (srtAudioFileInput) {
+      srtAudioFileInput.addEventListener("change", () => {
+        srtAudioSelectedFile = srtAudioFileInput.files?.[0] || null;
+        if (srtAudioUploadBtn) srtAudioUploadBtn.disabled = !srtAudioSelectedFile;
+      });
+    }
+    if (srtAudioUploadBtn) {
+      srtAudioUploadBtn.addEventListener("click", async () => {
+        if (!srtAudioSelectedFile) return;
+        clearSrtAudioError();
+        const fd = new FormData();
+        fd.append("srt_file", srtAudioSelectedFile);
+        try {
+          const res = await fetch("/api/srt-audio/jobs", { method: "POST", body: fd });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Upload SRT thất bại.");
+          srtAudioJobId = data.job_id;
+          srtAudioStep2?.classList.remove("hidden");
+          srtAudioStep3?.classList.remove("hidden");
+          if (srtAudioPlayer) {
+            srtAudioPlayer.hidden = true;
+            srtAudioPlayer.removeAttribute("src");
+          }
+          if (srtAudioDownloadBtn) srtAudioDownloadBtn.hidden = true;
+          await refreshSrtAudioCues();
+          showSrtAudioSuccess("Đã tải SRT. Chỉnh sửa rồi bấm Thuyết minh.");
+        } catch (err) {
+          showSrtAudioError(err.message || "Upload SRT thất bại.");
+        }
+      });
+    }
+    if (srtAudioSaveCuesBtn) {
+      srtAudioSaveCuesBtn.addEventListener("click", async () => {
+        if (!srtAudioJobId) return;
+        clearSrtAudioError();
+        try {
+          const res = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/cues`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              cues: collectSrtAudioCuesFromEditor(),
+              saydi_speed: Number(srtAudioSaydiSpeed?.value || 1),
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Lưu cues thất bại.");
+          renderSrtAudioCues(data.cues || []);
+          updateSrtAudioSynthesizeEnabled(!!data.has_blocking_issues);
+          showSrtAudioSuccess(data.has_blocking_issues
+            ? "Đã lưu. Vẫn còn cue lỗi — sửa trước khi thuyết minh."
+            : "Đã lưu chỉnh sửa.");
+        } catch (err) {
+          showSrtAudioError(err.message || "Lưu cues thất bại.");
+        }
+      });
+    }
+    if (srtAudioSaydiSpeed) {
+      srtAudioSaydiSpeed.addEventListener("change", () => {
+        refreshSrtAudioCues().catch((err) => showSrtAudioError(err.message || "Refresh cues thất bại."));
+      });
+    }
+    function stopSrtAudioPolling() {
+      if (srtAudioPollTimer) {
+        clearInterval(srtAudioPollTimer);
+        srtAudioPollTimer = null;
+      }
+    }
+    function beginSrtAudioPolling(jobId) {
+      stopSrtAudioPolling();
+      srtAudioPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/srt-audio/jobs/${jobId}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Poll thất bại.");
+          const pct = data.progress_percent || 0;
+          if (srtAudioProgressFill) srtAudioProgressFill.style.width = `${pct}%`;
+          if (srtAudioProgressText) {
+            srtAudioProgressText.textContent = data.status === "processing"
+              ? `Đang tạo audio… (${pct}%)`
+              : (data.stage || data.status || "");
+          }
+          if (data.status === "completed") {
+            stopSrtAudioPolling();
+            const fmt = srtAudioFormat?.value || data.output_format || "wav";
+            const url = `/api/srt-audio/jobs/${jobId}/audio?format=${encodeURIComponent(fmt)}&t=${Date.now()}`;
+            if (srtAudioPlayer) {
+              srtAudioPlayer.hidden = false;
+              srtAudioPlayer.src = url;
+            }
+            if (srtAudioDownloadBtn) {
+              srtAudioDownloadBtn.hidden = false;
+              srtAudioDownloadBtn.href = url;
+              srtAudioDownloadBtn.setAttribute("download", `srt-audio.${fmt}`);
+            }
+            if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = false;
+            showSrtAudioSuccess("Đã tạo audio thuyết minh.");
+          } else if (data.status === "failed") {
+            stopSrtAudioPolling();
+            if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = false;
+            showSrtAudioError(data.error || "Không tạo được audio.");
+          }
+        } catch (err) {
+          stopSrtAudioPolling();
+          if (srtAudioSynthesizeBtn) srtAudioSynthesizeBtn.disabled = false;
+          showSrtAudioError(err.message || "Poll thất bại.");
+        }
+      }, 1500);
+    }
+    if (srtAudioSynthesizeBtn) {
+      srtAudioSynthesizeBtn.addEventListener("click", async () => {
+        if (!srtAudioJobId) return;
+        clearSrtAudioError();
+        srtAudioSynthesizeBtn.disabled = true;
+        try {
+          // Auto-save current editor values first
+          const saveRes = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/cues`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              cues: collectSrtAudioCuesFromEditor(),
+              saydi_speed: Number(srtAudioSaydiSpeed?.value || 1),
+            }),
+          });
+          const saveData = await saveRes.json();
+          if (!saveRes.ok) throw new Error(saveData.detail || "Lưu cues thất bại.");
+          renderSrtAudioCues(saveData.cues || []);
+          if (saveData.has_blocking_issues) {
+            updateSrtAudioSynthesizeEnabled(true);
+            throw new Error("Còn cue lỗi. Sửa timestamp/text trước khi thuyết minh.");
+          }
+          const res = await fetch(`/api/srt-audio/jobs/${srtAudioJobId}/synthesize`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              saydi_sample: srtAudioSaydiSample?.value || null,
+              saydi_speed: Number(srtAudioSaydiSpeed?.value || 1),
+              output_format: srtAudioFormat?.value || "wav",
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Không bắt đầu thuyết minh.");
+          if (srtAudioProgressFill) srtAudioProgressFill.style.width = "20%";
+          if (srtAudioProgressText) srtAudioProgressText.textContent = "Đang tạo audio…";
+          beginSrtAudioPolling(srtAudioJobId);
+        } catch (err) {
+          srtAudioSynthesizeBtn.disabled = false;
+          showSrtAudioError(err.message || "Thuyết minh thất bại.");
+        }
+      });
+    }
 
     voiceoverVideoInput.addEventListener("change", () => {
       voiceoverSelectedVideo = voiceoverVideoInput.files[0] || null;

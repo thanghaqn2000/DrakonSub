@@ -1,0 +1,43 @@
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from auto_subtitle.srt_audio.timing import (  # noqa: E402
+    estimate_speech_ms,
+    ms_to_srt_timestamp,
+    parse_srt_timestamp_to_ms,
+    validate_cue_timings,
+)
+
+
+class SrtAudioTimingTests(unittest.TestCase):
+    def test_parse_and_format_roundtrip(self) -> None:
+        ms = parse_srt_timestamp_to_ms("00:01:02,345")
+        self.assertEqual(ms, 62_345)
+        self.assertEqual(ms_to_srt_timestamp(ms), "00:01:02,345")
+
+    def test_estimate_scales_with_speed(self) -> None:
+        base = estimate_speech_ms("abcdefghij", chars_per_second=10.0, saydi_speed=1.0)
+        fast = estimate_speech_ms("abcdefghij", chars_per_second=10.0, saydi_speed=2.0)
+        self.assertEqual(base, 1_000)
+        self.assertEqual(fast, 500)
+
+    def test_validate_flags_overlap_empty_and_too_long(self) -> None:
+        cues = [
+            {"index": 1, "start": "00:00:00,000", "end": "00:00:01,000", "text": "A" * 40},
+            {"index": 2, "start": "00:00:00,500", "end": "00:00:02,000", "text": "ok"},
+            {"index": 3, "start": "00:00:03,000", "end": "00:00:02,000", "text": "  "},
+        ]
+        issues = validate_cue_timings(cues, chars_per_second=13.0, saydi_speed=1.0)
+        self.assertIn("overlap_next", issues[0])
+        self.assertIn("too_long", issues[0])
+        self.assertIn("start_after_end", issues[2])
+        self.assertIn("empty_text", issues[2])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -43,3 +43,4 @@ data/youtube-cookies.txt
 .sa_bridge/state.json
 .sa_bridge/last_sa_response.md
 .sa_bridge/*.log
+.worktrees/

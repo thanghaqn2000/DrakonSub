@@ -85,9 +85,11 @@ def save_edited_cues(job_dir: Path, submitted: list[dict]) -> list[SubtitleCue]:
     return updated
 
 
-BLOCKING_ISSUE_CODES = frozenset(
-    {"empty_text", "start_after_end", "overlap_next", "invalid_timestamp"}
-)
+# Codes that fully block synthesize (empty text / broken timestamps).
+# Overlap_* and invalid_timestamp are handled automatically:
+#   - overlap_next → cascade placement pushes overlaps apart
+#   - invalid_timestamp → fallback to estimate/previous position
+BLOCKING_ISSUE_CODES = frozenset({"empty_text", "start_after_end"})
 WARNING_ISSUE_CODES = frozenset({"too_long"})
 
 

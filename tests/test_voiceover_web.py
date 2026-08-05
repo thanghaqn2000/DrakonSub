@@ -873,7 +873,9 @@ class VoiceoverScriptJobWebTests(unittest.TestCase):
                 "sample": "liam-warm-thoughtful-and-determined-7XOKiK112QRZRSLbCfMc",
             },
         )
-        self.assertEqual(len(data["saydi_voice_options"]), 4)
+        self.assertEqual(len(data["saydi_voice_options"]), 7)
+        self.assertEqual(data["saydi_voice_options"][4]["label"], "Nữ hot TikTok")
+        self.assertEqual(data["saydi_voice_options"][4]["sample"], "cuppy-vi")
         self.assertNotIn("token", json.dumps(data).lower())
 
     @patch("auto_subtitle.web.threading.Thread")

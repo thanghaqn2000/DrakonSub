@@ -1956,6 +1956,8 @@ def _run_srt_audio_synthesize_background(
     saydi_speed: Optional[float],
     output_format: str,
     chars_per_second: float,
+    stick_to_srt: bool,
+    max_extra_seconds: float,
 ) -> None:
     try:
         _update_srt_audio_job_json(
@@ -1973,6 +1975,8 @@ def _run_srt_audio_synthesize_background(
             saydi_speed=saydi_speed,
             output_format=output_format,
             chars_per_second=chars_per_second,
+            stick_to_srt=stick_to_srt,
+            max_extra_seconds=max_extra_seconds,
         )
         _update_srt_audio_job_json(
             job_id,
@@ -2135,13 +2139,21 @@ def synthesize_srt_audio_job(job_id: str, body: dict = Body(default_factory=dict
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "chars_per_second không hợp lệ.") from exc
 
+    stick_to_srt = bool(body.get("stick_to_srt", False))
+    try:
+        max_extra_seconds = float(body.get("max_extra_seconds", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "max_extra_seconds không hợp lệ.") from exc
+    if max_extra_seconds < 0:
+        raise HTTPException(400, "max_extra_seconds phải là số không âm.")
+
     speed_for_check = float(saydi_speed) if saydi_speed is not None else 1.0
     cues = load_effective_cues(_srt_audio_job_dir(job_id))
     rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed_for_check)
     if has_blocking_issues(rows):
         raise HTTPException(
             400,
-            "SRT còn lỗi timing (trống, chồng cue, timestamp sai). Hãy sửa trước khi thuyết minh.",
+            "SRT còn cue trống hoặc start ≥ end. Hãy sửa trước khi thuyết minh.",
         )
 
     _update_srt_audio_job_json(
@@ -2163,6 +2175,8 @@ def synthesize_srt_audio_job(job_id: str, body: dict = Body(default_factory=dict
             "saydi_speed": saydi_speed,
             "output_format": output_format,
             "chars_per_second": chars_per_second,
+            "stick_to_srt": stick_to_srt,
+            "max_extra_seconds": max_extra_seconds,
         },
         daemon=True,
     ).start()

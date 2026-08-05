@@ -61,6 +61,58 @@ def plan_cascade_starts(
     return planned
 
 
+def simulate_cascade_end(
+    intent_starts_ms: list[int],
+    durations_ms: list[int],
+    *,
+    gap_ms: int = 280,
+    max_gap_ms: int = 2000,
+) -> int:
+    """Return the planned end (ms) of the last cue under cascade placement."""
+    if not intent_starts_ms or not durations_ms:
+        return 0
+    starts = plan_cascade_starts(
+        intent_starts_ms,
+        durations_ms,
+        gap_ms=gap_ms,
+        max_gap_ms=max_gap_ms,
+    )
+    return starts[-1] + durations_ms[-1]
+
+
+def compute_stick_to_srt_speed(
+    intent_starts_ms: list[int],
+    durations_ms: list[int],
+    *,
+    srt_total_end_ms: int,
+    max_extra_ms: int,
+    gap_ms: int = 280,
+    max_gap_ms: int = 2000,
+    base_speed: float = 1.0,
+    max_speed: float = 2.0,
+) -> float:
+    """Compute the TTS speed needed so the cascade timeline ends within
+    srt_total_end_ms + max_extra_ms.
+
+    durations_ms are expected to be estimated at speed 1.0. The returned speed
+    is clamped to the [base_speed, max_speed] range. Returns base_speed when
+    the fit is already OK.
+    """
+    if not durations_ms:
+        return base_speed
+    budget_ms = max(int(srt_total_end_ms) + int(max_extra_ms), 1)
+    cascade_end = simulate_cascade_end(
+        intent_starts_ms,
+        durations_ms,
+        gap_ms=gap_ms,
+        max_gap_ms=max_gap_ms,
+    )
+    if cascade_end <= budget_ms:
+        return float(base_speed)
+    factor = cascade_end / budget_ms
+    return min(max(float(base_speed) * factor, float(base_speed)), float(max_speed))
+
+
 def estimate_speech_ms(
     text: str,
     *,

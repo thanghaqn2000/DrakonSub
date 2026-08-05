@@ -38,8 +38,14 @@ class SaydiSampleValidationTests(unittest.TestCase):
 
     def test_voice_presets_default_to_liam(self) -> None:
         presets = list_saydi_voice_presets()
-        self.assertEqual(len(presets), 4)
+        self.assertEqual(len(presets), 7)
         self.assertEqual(presets[0]["label"], "Liam")
+        self.assertEqual(presets[4]["label"], "Nữ hot TikTok")
+        self.assertEqual(presets[4]["sample"], "cuppy-vi")
+        self.assertEqual(presets[5]["label"], "Minh Quân rõ ràng, nhanh")
+        self.assertEqual(presets[5]["sample"], "hn-minh-qu-n-6854cb56138047a75b2b2163")
+        self.assertEqual(presets[6]["label"], "Tony Hoang rõ ràng, nhanh")
+        self.assertEqual(presets[6]["sample"], "tony-hoang-K7ewtjKRNtwwt3lKQ6M0")
         self.assertEqual(presets[0]["sample"], DEFAULT_SAYDI_SAMPLE)
         self.assertEqual(
             DEFAULT_SAYDI_SAMPLE,

@@ -7,10 +7,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from auto_subtitle.srt_audio.timing import (  # noqa: E402
+    compute_stick_to_srt_speed,
     estimate_speech_ms,
     ms_to_srt_timestamp,
     parse_srt_timestamp_to_ms,
     plan_cascade_starts,
+    simulate_cascade_end,
     validate_cue_timings,
 )
 
@@ -85,6 +87,54 @@ class CascadePlacementTests(unittest.TestCase):
     def test_max_gap_below_min_raises(self) -> None:
         with self.assertRaises(ValueError):
             plan_cascade_starts([0, 1000], [100, 100], gap_ms=500, max_gap_ms=200)
+
+
+class StickToSrtSpeedTests(unittest.TestCase):
+    def test_simulate_cascade_end_last_cue(self) -> None:
+        end = simulate_cascade_end(
+            [0, 3000],
+            [5000, 2000],
+            gap_ms=280,
+            max_gap_ms=2000,
+        )
+        # starts = [0, 5280]; last end = 5280 + 2000 = 7280
+        self.assertEqual(end, 7280)
+
+    def test_returns_base_speed_when_fit(self) -> None:
+        speed = compute_stick_to_srt_speed(
+            [0, 2000],
+            [1000, 1000],
+            srt_total_end_ms=3000,
+            max_extra_ms=0,
+            base_speed=1.0,
+        )
+        self.assertEqual(speed, 1.0)
+
+    def test_increases_speed_when_overflow(self) -> None:
+        speed = compute_stick_to_srt_speed(
+            [0, 1000],
+            [5000, 5000],
+            srt_total_end_ms=3000,
+            max_extra_ms=0,
+            base_speed=1.0,
+            max_speed=2.0,
+        )
+        # cascade end = 1000 + 5000 + 5000 = 11000; budget = 3000; factor = 3.66 → clamp 2.0
+        self.assertAlmostEqual(speed, 2.0)
+
+    def test_respects_max_extra_budget(self) -> None:
+        speed = compute_stick_to_srt_speed(
+            [0, 1000],
+            [5000, 5000],
+            srt_total_end_ms=3000,
+            max_extra_ms=3000,
+            gap_ms=0,
+            max_gap_ms=0,
+            base_speed=1.0,
+            max_speed=2.0,
+        )
+        # gap=0: starts = [0, 5000]; end = 10000; budget = 6000; factor = 1.6667
+        self.assertAlmostEqual(speed, 1.667, places=3)
 
 
 if __name__ == "__main__":

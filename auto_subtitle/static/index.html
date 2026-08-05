@@ -1181,7 +1181,7 @@
 
         <div id="srt-audio-step2" class="hidden">
           <h3>Chỉnh sửa cue</h3>
-          <p class="field-hint">Chỉ sửa text và timestamp. Cue chồng/sai timestamp sẽ chặn thuyết minh. Cue text dài hơn slot chỉ cảnh báo — vẫn tạo được. Sau thuyết minh, timestamp được cập nhật theo thời gian đọc thực tế (có thể đẩy cue sau).</p>
+          <p class="field-hint">Chỉ sửa text và timestamp. Cue trống hoặc start ≥ end sẽ chặn thuyết minh. Cue chồng / timestamp sai / text dài hơn slot chỉ cảnh báo — vẫn tạo được (hệ thống tự đẩy cue sau). Sau thuyết minh, timestamp được cập nhật theo thời gian đọc thực tế.</p>
           <div id="srt-audio-cue-editor" class="subtitle-modal-body" style="max-height: min(70vh, 560px); padding: 0; margin: 0.75rem 0;"></div>
           <div class="actions">
             <button class="btn-secondary" id="srt-audio-save-cues-btn" disabled>Lưu chỉnh sửa</button>
@@ -1197,6 +1197,9 @@
                 <option value="quyen-ru-f966mdF5njWREvreUG07">Quyến rũ</option>
                 <option value="ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6">Truyền cảm hứng</option>
                 <option value="moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR">Moncellence</option>
+                <option value="cuppy-vi">Nữ hot TikTok</option>
+                <option value="hn-minh-qu-n-6854cb56138047a75b2b2163">Minh Quân rõ ràng, nhanh</option>
+                <option value="tony-hoang-K7ewtjKRNtwwt3lKQ6M0">Tony Hoang rõ ràng, nhanh</option>
               </select>
             </div>
             <div class="field" style="margin-top:0">
@@ -1205,6 +1208,17 @@
             </div>
             <div class="field" style="margin-top:0; flex: 1 1 100%;">
               <p class="srt-audio-help">Tốc độ do bạn chọn. Nghỉ giữa hai câu tối thiểu ~280ms, tối đa 2s (dư hơn sẽ kéo câu sau lên sớm). Nếu câu dài hơn khoảng trống, hệ thống đẩy các cue sau và cập nhật timestamp.</p>
+            </div>
+            <div class="field" style="margin-top:0">
+              <label class="toggle-row" for="srt-audio-stick-to-srt">
+                <input type="checkbox" id="srt-audio-stick-to-srt" />
+                <span>Bám sát SRT gốc</span>
+              </label>
+              <p class="field-hint">Hệ thống tự thu ngắn audio cho khớp timeline SRT gốc (giảm khoảng nghỉ, nếu vẫn vượt thì tăng tốc độ đọc).</p>
+            </div>
+            <div class="field" style="margin-top:0">
+              <label for="srt-audio-max-extra-seconds">Cho phép vượt tối đa (giây)</label>
+              <input type="number" id="srt-audio-max-extra-seconds" min="0" max="120" step="0.5" value="0" disabled />
             </div>
             <div class="field" style="margin-top:0">
               <label for="srt-audio-format">Định dạng tải</label>
@@ -1420,6 +1434,9 @@
             { label: "Quyến rũ", sample: "quyen-ru-f966mdF5njWREvreUG07" },
             { label: "Truyền cảm hứng", sample: "ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6" },
             { label: "Moncellence", sample: "moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR" },
+            { label: "Nữ hot TikTok", sample: "cuppy-vi" },
+            { label: "Minh Quân rõ ràng, nhanh", sample: "hn-minh-qu-n-6854cb56138047a75b2b2163" },
+            { label: "Tony Hoang rõ ràng, nhanh", sample: "tony-hoang-K7ewtjKRNtwwt3lKQ6M0" },
           ];
       const preferred = selectedSample || voiceoverDefaultSaydiSample || voices[0].sample;
       voiceoverSaydiSample.innerHTML = voices.map((voice) => {
@@ -1939,6 +1956,8 @@
     const srtAudioSaydiSample = document.getElementById("srt-audio-saydi-sample");
     const srtAudioSaydiSpeed = document.getElementById("srt-audio-saydi-speed");
     const srtAudioFormat = document.getElementById("srt-audio-format");
+    const srtAudioStickToSrt = document.getElementById("srt-audio-stick-to-srt");
+    const srtAudioMaxExtraSeconds = document.getElementById("srt-audio-max-extra-seconds");
     const srtAudioPlayer = document.getElementById("srt-audio-player");
     const srtAudioErrorBox = document.getElementById("srt-audio-error-box");
     const srtAudioSuccessBox = document.getElementById("srt-audio-success-box");
@@ -2042,11 +2061,13 @@
     const SRT_AUDIO_BLOCKING_ISSUES = new Set([
       "empty_text",
       "start_after_end",
-      "overlap_next",
-      "invalid_timestamp",
     ]);
     function cueHasBlockingIssues(cue) {
       return (cue.issues || []).some((code) => SRT_AUDIO_BLOCKING_ISSUES.has(code));
+    }
+    function cueHasVisualIssues(cue) {
+      const codes = new Set(cue.issues || []);
+      return codes.has("overlap_next") || codes.has("invalid_timestamp");
     }
     function cueHasWarningOnly(cue) {
       const issues = cue.issues || [];
@@ -2138,13 +2159,20 @@
           updateSrtAudioSynthesizeEnabled(!!data.has_blocking_issues);
           showSrtAudioSuccess(
             data.has_blocking_issues
-              ? "Đã lưu. Vẫn còn lỗi timing — sửa trước khi thuyết minh."
+              ? "Đã lưu. Còn cue trống hoặc start ≥ end — sửa trước khi thuyết minh."
               : (data.has_warning_issues
                 ? "Đã lưu. Có cảnh báo text dài hơn slot — vẫn có thể thuyết minh."
                 : "Đã lưu chỉnh sửa.")
           );
         } catch (err) {
           showSrtAudioError(err.message || "Lưu cues thất bại.");
+        }
+      });
+    }
+    if (srtAudioStickToSrt) {
+      srtAudioStickToSrt.addEventListener("change", () => {
+        if (srtAudioMaxExtraSeconds) {
+          srtAudioMaxExtraSeconds.disabled = !srtAudioStickToSrt.checked;
         }
       });
     }
@@ -2246,7 +2274,7 @@
           if (saveData.has_blocking_issues) {
             updateSrtAudioSynthesizeEnabled(true);
             hideSrtAudioProgress();
-            throw new Error("Còn lỗi timing (trống/chồng cue/timestamp). Sửa trước khi thuyết minh.");
+            throw new Error("Còn cue trống hoặc start ≥ end. Sửa trước khi thuyết minh.");
           }
           if (saveData.has_warning_issues) {
             showSrtAudioSuccess("Có cảnh báo text dài hơn slot — vẫn tiếp tục tạo audio.");
@@ -2259,6 +2287,8 @@
               saydi_sample: srtAudioSaydiSample?.value || null,
               saydi_speed: Number(srtAudioSaydiSpeed?.value || 1),
               output_format: srtAudioFormat?.value || "wav",
+              stick_to_srt: !!(srtAudioStickToSrt && srtAudioStickToSrt.checked),
+              max_extra_seconds: Number(srtAudioMaxExtraSeconds?.value || 0),
             }),
           });
           const data = await res.json();

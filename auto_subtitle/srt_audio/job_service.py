@@ -13,7 +13,14 @@ from auto_subtitle.voiceover.saydi_tts import load_saydi_config, synthesize_to_f
 
 from .audio_track import build_srt_audio_track, convert_wav_to_mp3
 from .cue_service import annotate_cues, edited_srt_path, has_blocking_issues, load_effective_cues
-from .timing import ms_to_srt_timestamp, parse_srt_timestamp_to_ms, plan_cascade_starts
+from .timing import (
+    compute_stick_to_srt_speed,
+    estimate_speech_ms,
+    ms_to_srt_timestamp,
+    parse_srt_timestamp_to_ms,
+    plan_cascade_starts,
+    simulate_cascade_end,
+)
 
 
 class SrtAudioJobError(RuntimeError):
@@ -95,6 +102,8 @@ def run_synthesize_job(
     chars_per_second: float = 13.0,
     cue_gap_ms: int | None = None,
     cue_max_gap_ms: int | None = None,
+    stick_to_srt: bool = False,
+    max_extra_seconds: float = 0.0,
 ) -> dict[str, Any]:
     fmt = (output_format or "wav").strip().lower()
     if fmt not in {"wav", "mp3"}:
@@ -107,7 +116,7 @@ def run_synthesize_job(
     rows = annotate_cues(cues, chars_per_second=chars_per_second, saydi_speed=speed)
     if has_blocking_issues(rows):
         raise SrtAudioJobError(
-            "SRT còn lỗi timing (trống, chồng cue, timestamp sai). Hãy sửa trước khi thuyết minh."
+            "SRT còn cue trống hoặc start ≥ end. Hãy sửa trước khi thuyết minh."
         )
 
     saydi_config = load_saydi_config(
@@ -117,24 +126,90 @@ def run_synthesize_job(
     if not getattr(saydi_config, "token", ""):
         raise SrtAudioJobError("SAYDI_TTS_API_TOKEN is not configured")
 
+    def _safe_start_ms(cue: SubtitleCue) -> int:
+        try:
+            return parse_srt_timestamp_to_ms(cue.start)
+        except (ValueError, AttributeError):
+            return 0
+
+    intent_starts_ms = [_safe_start_ms(cue) for cue in cues]
+    try:
+        srt_total_end_ms = parse_srt_timestamp_to_ms(cues[-1].end)
+    except (ValueError, AttributeError):
+        srt_total_end_ms = max(intent_starts_ms) if intent_starts_ms else 0
+    max_extra_ms = max(0, int(round(float(max_extra_seconds) * 1000)))
+
+    if stick_to_srt:
+        # Bước 1: ưu tiên giảm khoảng nghỉ xuống 0 trước khi tăng tốc độ đọc.
+        estimated_durations = [
+            estimate_speech_ms(
+                cue.text, chars_per_second=chars_per_second, saydi_speed=1.0
+            )
+            for cue in cues
+        ]
+        stick_speed = compute_stick_to_srt_speed(
+            intent_starts_ms,
+            estimated_durations,
+            srt_total_end_ms=srt_total_end_ms,
+            max_extra_ms=max_extra_ms,
+            gap_ms=0,
+            max_gap_ms=0,
+            base_speed=speed,
+            max_speed=2.0,
+        )
+        if stick_speed > speed:
+            speed = stick_speed
+            saydi_config = load_saydi_config(
+                sample_override=saydi_sample,
+                speed_override=speed,
+            )
+
     segments_dir = job_dir / "segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
 
     segment_paths: list[Path] = []
-    intent_starts_ms: list[int] = []
     durations_ms: list[int] = []
 
-    for cue in cues:
-        intent_start = parse_srt_timestamp_to_ms(cue.start)
-        segment_path = segments_dir / f"{cue.index:04d}.wav"
-        synthesize_to_file(cue.text, segment_path, config=saydi_config)
-        tts_ms = probe_audio_duration_ms(segment_path)
-        segment_paths.append(segment_path)
-        intent_starts_ms.append(intent_start)
-        durations_ms.append(tts_ms)
+    def _synthesize_all(tts_speed: float) -> None:
+        nonlocal saydi_config, segment_paths, durations_ms
+        cfg = load_saydi_config(sample_override=saydi_sample, speed_override=tts_speed)
+        saydi_config = cfg
+        segment_paths = []
+        durations_ms = []
+        for cue in cues:
+            segment_path = segments_dir / f"{cue.index:04d}.wav"
+            synthesize_to_file(cue.text, segment_path, config=cfg)
+            try:
+                tts_ms = probe_audio_duration_ms(segment_path)
+            except Exception:
+                # Fallback to estimate if the returned audio can't be probed.
+                tts_ms = estimate_speech_ms(
+                    cue.text, chars_per_second=chars_per_second, saydi_speed=tts_speed
+                )
+            segment_paths.append(segment_path)
+            durations_ms.append(tts_ms)
 
+    _synthesize_all(speed)
+
+    # Bước 2: nếu duration thật vẫn vượt budget thì tăng speed và re-TTS (tối đa 2 retry).
+    if stick_to_srt:
+        budget_ms = max(srt_total_end_ms + max_extra_ms, 1)
+        for _ in range(2):
+            cascade_end = simulate_cascade_end(
+                intent_starts_ms, durations_ms, gap_ms=0, max_gap_ms=0
+            )
+            if cascade_end <= budget_ms or speed >= 2.0:
+                break
+            next_speed = min(2.0, speed * (cascade_end / budget_ms))
+            if next_speed <= speed + 1e-6:
+                break
+            speed = next_speed
+            _synthesize_all(speed)
+
+    gap_to_use = 0 if stick_to_srt else gap_ms
+    max_gap_to_use = 0 if stick_to_srt else max_gap_ms
     planned_starts = plan_cascade_starts(
-        intent_starts_ms, durations_ms, gap_ms=gap_ms, max_gap_ms=max_gap_ms
+        intent_starts_ms, durations_ms, gap_ms=gap_to_use, max_gap_ms=max_gap_to_use
     )
 
     updated_cues: list[SubtitleCue] = []

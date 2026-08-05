@@ -20,6 +20,9 @@ SAYDI_VOICE_PRESETS: tuple[tuple[str, str], ...] = (
     ("Quyến rũ", "quyen-ru-f966mdF5njWREvreUG07"),
     ("Truyền cảm hứng", "ng-n-nguy-n-inspirational-narrator-DvG3I1kDzdBY3u4EzYh6"),
     ("Moncellence", "moncellence-clear-and-masculine-Jez3JdhBInQTvlAvDOWR"),
+    ("Nữ hot TikTok", "cuppy-vi"),
+    ("Minh Quân rõ ràng, nhanh", "hn-minh-qu-n-6854cb56138047a75b2b2163"),
+    ("Tony Hoang rõ ràng, nhanh", "tony-hoang-K7ewtjKRNtwwt3lKQ6M0"),
 )
 SAYDI_SAMPLE_INVALID_MESSAGE = (
     "Giọng đọc Saydi không hợp lệ. Vui lòng kiểm tra mã giọng/sample."

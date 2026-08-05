@@ -82,7 +82,9 @@ class SrtAudioWebTests(unittest.TestCase):
         self.assertEqual(synth.json()["status"], "processing")
         mock_thread.assert_called_once()
 
-    def test_synthesize_rejects_overlap(self) -> None:
+    @patch("auto_subtitle.web.threading.Thread")
+    def test_synthesize_allows_overlap(self, mock_thread) -> None:
+        mock_thread.return_value.start = MagicMock()
         data = self._create_job(
             (
                 "1\n00:00:00,000 --> 00:00:01,500\nok\n\n"
@@ -94,7 +96,9 @@ class SrtAudioWebTests(unittest.TestCase):
             f"/api/srt-audio/jobs/{job_id}/synthesize",
             json={"output_format": "wav", "saydi_speed": 1.0},
         )
-        self.assertEqual(synth.status_code, 400)
+        self.assertEqual(synth.status_code, 200)
+        self.assertEqual(synth.json()["status"], "processing")
+        mock_thread.assert_called_once()
 
     @patch("auto_subtitle.web.threading.Thread")
     def test_synthesize_starts_background(self, mock_thread) -> None:

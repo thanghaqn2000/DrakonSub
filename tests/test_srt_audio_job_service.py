@@ -69,7 +69,17 @@ class SrtAudioJobServiceTests(unittest.TestCase):
                                 mock_tts.assert_called_once()
                                 self.assertTrue(Path(result["output_wav"]).is_file())
 
-    def test_synthesize_rejects_overlap_before_saydi(self) -> None:
+    @patch("auto_subtitle.srt_audio.job_service.convert_wav_to_mp3")
+    @patch("auto_subtitle.srt_audio.job_service.build_srt_audio_track")
+    @patch("auto_subtitle.srt_audio.job_service.probe_audio_duration_ms", return_value=500)
+    @patch("auto_subtitle.srt_audio.job_service.synthesize_to_file")
+    @patch(
+        "auto_subtitle.srt_audio.job_service.load_saydi_config",
+        return_value=type("C", (), {"token": "t", "sample": "s", "speed": 1.0})(),
+    )
+    def test_synthesize_allows_overlap_and_cascades(
+        self, _cfg, _tts, _probe, _mock_build, _mock_mp3
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             srt = (
@@ -77,16 +87,15 @@ class SrtAudioJobServiceTests(unittest.TestCase):
                 "2\n00:00:01,000 --> 00:00:02,000\nok\n"
             ).encode("utf-8")
             _, job_dir = create_job_from_srt_bytes(root, srt)
-            with patch("auto_subtitle.srt_audio.job_service.synthesize_to_file") as mock_tts:
-                with self.assertRaises(SrtAudioJobError):
-                    run_synthesize_job(
-                        job_dir,
-                        saydi_sample=None,
-                        saydi_speed=1.0,
-                        output_format="wav",
-                        chars_per_second=13.0,
-                    )
-                mock_tts.assert_not_called()
+            result = run_synthesize_job(
+                job_dir,
+                saydi_sample=None,
+                saydi_speed=1.0,
+                output_format="wav",
+                chars_per_second=13.0,
+            )
+            self.assertTrue(result["output_wav"])
+            _tts.assert_called()
 
     @patch("auto_subtitle.srt_audio.job_service.convert_wav_to_mp3")
     @patch("auto_subtitle.srt_audio.job_service.build_srt_audio_track")

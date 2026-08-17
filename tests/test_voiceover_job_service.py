@@ -244,6 +244,68 @@ class VoiceoverJobServiceTests(unittest.TestCase):
         self.assertEqual(manifest["tts_provider"], "saydi")
         self.assertNotIn("SAYDI_TTS_API_TOKEN", json.dumps(manifest))
 
+    @patch("auto_subtitle.voiceover.job_service.mux_video_with_audio")
+    @patch("auto_subtitle.voiceover.job_service.mix_audio_tracks")
+    @patch("auto_subtitle.voiceover.job_service.build_voiceover_track")
+    @patch(
+        "auto_subtitle.voiceover.job_service.probe_audio_duration_ms",
+        side_effect=[2_910, 1_800, 1_200],
+    )
+    @patch("auto_subtitle.voiceover.job_service.synthesize_to_file")
+    @patch(
+        "auto_subtitle.voiceover.job_service.load_saydi_config",
+        return_value=type(
+            "Cfg",
+            (),
+            {
+                "token": "x",
+                "sample": "default-sample",
+                "speed": 1.0,
+                "lang": "vi",
+                "output_format": "wav",
+            },
+        )(),
+    )
+    @patch("auto_subtitle.voiceover.job_service.video_has_audio_stream", return_value=True)
+    @patch("auto_subtitle.voiceover.job_service.probe_video_duration_ms", return_value=120_000)
+    def test_overflow_raises_speed_then_shifts_to_avoid_overlap(
+        self,
+        _mock_video_duration,
+        _mock_has_audio,
+        _mock_load_cfg,
+        mock_synthesize,
+        _mock_probe_audio,
+        _mock_build_track,
+        _mock_mix_audio,
+        _mock_mux,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_video = Path(tmpdir) / "input.mp4"
+            input_video.write_bytes(b"fake")
+            srt_path = Path(tmpdir) / "input.srt"
+            srt_path.write_text(
+                "1\n00:00:51,720 --> 00:00:53,500\nCau dai bi tran\n\n"
+                "2\n00:00:53,580 --> 00:00:55,000\nCau tiep theo\n",
+                encoding="utf-8",
+            )
+            options = VoiceoverJobOptions(
+                input_video=input_video,
+                voiceover_srt=srt_path,
+                output_video=Path(tmpdir) / "out.mp4",
+                workdir=Path(tmpdir) / "job",
+                force=True,
+            )
+            result = run_voiceover_job(options)
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(mock_synthesize.call_count, 3)
+        self.assertGreater(manifest["segments"][0]["saydi_speed"], 1.0)
+        self.assertEqual(manifest["segments"][0]["overlap_next_ms"], 0)
+        self.assertEqual(manifest["segments"][1]["overlap_next_ms"], 0)
+        self.assertGreater(manifest["segments"][1]["shifted_ms"], 0)
+        self.assertEqual(manifest["summary"]["overlap_next_count"], 0)
+        self.assertGreaterEqual(manifest["summary"]["speed_raised_count"], 1)
+
     @patch.object(prototype_mod, "run_voiceover_job")
     def test_cli_delegates_to_service(self, mock_run_job) -> None:
         mock_run_job.return_value = VoiceoverJobResult(

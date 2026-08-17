@@ -380,6 +380,8 @@ def _run_script_generation_background(
             },
         )
     except VoiceoverJobError as exc:
+        print(f"[voiceover-script {job_id}] failed: {exc}")
+        traceback.print_exc()
         _voiceover_update_job_json(
             job_id,
             {
@@ -390,6 +392,8 @@ def _run_script_generation_background(
             },
         )
     except Exception as exc:
+        print(f"[voiceover-script {job_id}] unexpected failure: {exc}")
+        traceback.print_exc()
         _voiceover_update_job_json(
             job_id,
             {

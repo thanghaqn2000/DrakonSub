@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from .audio_builder import (
     build_manifest_summary,
@@ -15,7 +16,7 @@ from .audio_builder import (
     probe_video_duration_ms,
 )
 from .audio_mixer import mix_audio_tracks, mux_video_with_audio, video_has_audio_stream
-from .saydi_tts import load_saydi_config, synthesize_to_file
+from .saydi_tts import SaydiConfig, load_saydi_config, synthesize_to_file
 from .srt_parser import VoiceoverSrtError, parse_voiceover_srt
 from .text_preparer import (
     PrepareTextMode,
@@ -25,7 +26,22 @@ from .text_preparer import (
     summarize_prepared_cues,
     write_prepared_srt,
 )
-from .timing_planner import plan_timing
+from .timing_planner import cue_audio_budget_ms, plan_timing, suggest_saydi_speed_for_budget
+
+
+def _saydi_config_with_speed(config: SaydiConfig | object, speed: float) -> SaydiConfig | object:
+    if isinstance(config, SaydiConfig) or (is_dataclass(config) and not isinstance(config, type)):
+        return replace(config, speed=speed)  # type: ignore[arg-type]
+    return SimpleNamespace(
+        api_url=getattr(config, "api_url", ""),
+        token=getattr(config, "token", ""),
+        sample=getattr(config, "sample", ""),
+        speed=speed,
+        output_format=getattr(config, "output_format", "wav"),
+        timeout_seconds=getattr(config, "timeout_seconds", 120),
+        lang=getattr(config, "lang", "vi"),
+        model=getattr(config, "model", None),
+    )
 
 
 class VoiceoverJobError(RuntimeError):
@@ -151,13 +167,42 @@ def run_voiceover_job(
 
         segment_paths: list[Path] = []
         tts_durations_ms: list[int] = []
+        saydi_speeds: list[float] = []
         warnings: list[str] = []
+        base_speed = float(saydi_config.speed)
 
-        for cue in tts_cues:
+        for idx, cue in enumerate(tts_cues):
             segment_path = segments_dir / _segment_filename(cue.index)
-            synthesize_to_file(cue.text, segment_path, config=saydi_config)
+            cue_config = saydi_config
+            synthesize_to_file(cue.text, segment_path, config=cue_config)
+            duration_ms = probe_audio_duration_ms(segment_path)
+
+            is_last_cue = idx + 1 >= len(tts_cues)
+            next_start_ms = tts_cues[idx + 1].start_ms if not is_last_cue else video_duration_ms
+            budget_ms = cue_audio_budget_ms(
+                cue,
+                next_start_ms=next_start_ms,
+                video_duration_ms=video_duration_ms,
+                is_last_cue=is_last_cue,
+                min_gap_ms=options.min_gap_ms,
+                max_borrow_after_ms=options.max_borrow_after_ms,
+            )
+            suggested_speed = suggest_saydi_speed_for_budget(
+                base_speed=base_speed,
+                tts_duration_ms=duration_ms,
+                budget_ms=budget_ms,
+            )
+            if suggested_speed > base_speed + 1e-9:
+                cue_config = _saydi_config_with_speed(saydi_config, suggested_speed)
+                synthesize_to_file(cue.text, segment_path, config=cue_config)
+                duration_ms = probe_audio_duration_ms(segment_path)
+                warnings.append(
+                    f"cue_{cue.index}:raised_saydi_speed_to_{suggested_speed:.2f}"
+                )
+
             segment_paths.append(segment_path)
-            tts_durations_ms.append(probe_audio_duration_ms(segment_path))
+            tts_durations_ms.append(duration_ms)
+            saydi_speeds.append(float(getattr(cue_config, "speed", base_speed)))
 
         timing_plans = plan_timing(
             tts_cues,
@@ -166,15 +211,21 @@ def run_voiceover_job(
             min_gap_ms=options.min_gap_ms,
             max_borrow_after_ms=options.max_borrow_after_ms,
             severe_overflow_ms=options.severe_overflow_ms,
+            resolve_overlaps=True,
         )
         manifests = build_segment_manifests(
             tts_cues,
             segment_paths,
             timing_plans,
             prepared_cues=prepared_cues,
+            saydi_speeds=saydi_speeds,
         )
         summary = build_manifest_summary(timing_plans)
         summary.update(text_summary)
+        summary["speed_raised_count"] = sum(
+            1 for speed in saydi_speeds if speed > base_speed + 1e-9
+        )
+        summary["max_saydi_speed"] = max(saydi_speeds, default=base_speed)
 
         _report("mixing_audio", 80)
 
@@ -266,8 +317,10 @@ def run_voiceover_job(
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     for segment in manifests:
-        if segment.status in {"overflow_warning", "severe_overflow"}:
+        if segment.status in {"overflow_warning", "severe_overflow", "shifted_to_avoid_overlap"}:
             warnings.append(f"cue_{segment.index}:{segment.status}")
+        if segment.shifted_ms > 0 and segment.status != "shifted_to_avoid_overlap":
+            warnings.append(f"cue_{segment.index}:shifted_{segment.shifted_ms}ms")
 
     return VoiceoverJobResult(
         output_video=output_video,

@@ -83,7 +83,7 @@ def prepare_voiceover_srt_from_video(
         raise
     except Exception as exc:
         message = str(exc)
-        if "transcrib" in message.lower():
+        if "transcrib" in message.lower() or "whisper" in message.lower():
             raise VoiceoverJobError("Không thể nhận diện lời nói trong video.") from exc
         if "translat" in message.lower():
             raise VoiceoverJobError("Không thể dịch phụ đề sang tiếng Việt.") from exc

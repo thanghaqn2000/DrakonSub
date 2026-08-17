@@ -50,9 +50,16 @@ def build_word_aligned_segments(
     max_duration: float = 3.5,
 ) -> List[dict]:
     """Split Whisper output into shorter cues aligned to spoken words."""
+    if not segments:
+        return []
+
     words = []
     for segment in segments:
-        segment_words = segment.get("words") or []
+        if not isinstance(segment, dict):
+            continue
+        segment_words = [
+            word for word in (segment.get("words") or []) if isinstance(word, dict)
+        ]
         if segment_words:
             words.extend(segment_words)
         elif segment.get("text", "").strip():
@@ -84,13 +91,17 @@ def build_word_aligned_segments(
         chunk_end = None
 
     for word_info in words:
-        token = word_info.get("word", "").strip()
+        token = str(word_info.get("word") or "").strip()
         if not token:
+            continue
+        start = word_info.get("start")
+        end = word_info.get("end")
+        if start is None or end is None:
             continue
 
         if chunk_start is None:
-            chunk_start = word_info["start"]
-        chunk_end = word_info["end"]
+            chunk_start = start
+        chunk_end = end
         chunk_words.append(token)
 
         text = " ".join(chunk_words)
